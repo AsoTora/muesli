@@ -347,13 +347,9 @@ final class MuesliController: NSObject {
     private var latestMeetingActivityCandidate: MeetingCandidate?
     private var latestMeetingActivityCandidateObservedAt: Date?
     private lazy var detectedMeetingAutoRecordCoordinator = DetectedMeetingAutoRecordCoordinator(
-        startRecording: { [weak self] candidate in
+        startRecording: { [weak self] request in
             guard let self else { return false }
-            return self.startForegroundMeetingRecording(
-                title: candidate.subtitle,
-                autoStopSource: MeetingAutoStopSource(candidate: candidate),
-                startOrigin: .detectedAutoRecord
-            )
+            return self.startDetectedMeetingRecording(request)
         },
         recordingStarted: { [weak self] candidate in
             self?.meetingMonitor.markRecordingStarted(candidate)
@@ -4261,6 +4257,7 @@ final class MuesliController: NSObject {
     }
 
     private func discardMeetingStateForTermination() {
+        detectedMeetingAutoRecordCoordinator.startDidFail()
         activeMeetingSession?.discard()
         activeMeetingSession = nil
         disarmMeetingAutoStop()
@@ -4367,6 +4364,18 @@ final class MuesliController: NSObject {
     }
 
     @discardableResult
+    private func startDetectedMeetingRecording(_ request: DetectedMeetingAutoRecordStartRequest) -> Bool {
+        guard ensureBasicDictationPermissionsBeforeDashboard() else { return false }
+        guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
+        return startMeetingRecording(
+            title: request.title,
+            openDocument: request.openDocument,
+            autoStopSource: request.autoStopSource,
+            startOrigin: request.startOrigin
+        )
+    }
+
+    @discardableResult
     func startMeetingRecording(
         title: String = "Meeting",
         calendarEventID: String? = nil,
@@ -4452,6 +4461,7 @@ final class MuesliController: NSObject {
                 )
             } catch is CancellationError {
                 if self.meetingStartMeetingID == meetingID {
+                    self.detectedMeetingAutoRecordCoordinator.startDidFail()
                     self.disarmMeetingAutoStop()
                     self.resolveLiveMeetingAfterStartFailure(id: meetingID)
                     self.cancelMeetingRecordingHotkeyToggleAfterFailedStart(meetingID: meetingID)
@@ -4465,6 +4475,7 @@ final class MuesliController: NSObject {
                 }
             } catch {
                 if self.meetingStartMeetingID == meetingID {
+                    self.detectedMeetingAutoRecordCoordinator.startDidFail()
                     fputs("[muesli-native] failed to start meeting: \(error)\n", stderr)
                     _ = self.recordDiagnosticIncident(
                         kind: .meetingStartFailed,
@@ -4807,6 +4818,7 @@ final class MuesliController: NSObject {
 
     func cancelMeetingPreparation() {
         guard isStartingMeetingRecording, activeMeetingSession == nil else { return }
+        detectedMeetingAutoRecordCoordinator.startDidFail()
 
         if let meetingID = meetingStartMeetingID {
             // Live meeting start cancellation
@@ -4977,6 +4989,7 @@ final class MuesliController: NSObject {
                 }
                 activeMeetingSession = meetingSession
                 activeMeetingID = meetingID
+                detectedMeetingAutoRecordCoordinator.recordingDidBecomeActive()
                 activeMeetingAutoStop.markRecordingStarted(now: Date())
                 meetingMonitor.suppressWhileActive()
                 meetingMonitor.refreshState()
@@ -5579,6 +5592,9 @@ final class MuesliController: NSObject {
                     meetingID: completedMeetingID,
                     title: meetingTitle
                 )
+                if completedMeetingID != nil {
+                    self.detectedMeetingAutoRecordCoordinator.recordingDidFinalize()
+                }
                 self.updateMeetingNotificationVisibility()
             }
         }

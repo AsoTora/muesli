@@ -1149,7 +1149,7 @@ enum MeetingSummaryClient {
               let host = components.host?.lowercased() else {
             return false
         }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
     static func shouldFollowLocalGemmaRedirect(to url: URL?) -> Bool {

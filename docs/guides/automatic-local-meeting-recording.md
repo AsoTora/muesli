@@ -206,4 +206,3 @@ Use only `localhost`, `127.0.0.1`, or `::1`. Hostnames such as `localhost.exampl
 - A transient loss should recover during the visible grace period.
 - If it stops too soon, inspect whether browser/Teams audio input and meeting URL evidence both disappeared.
 - If it never stops, fully leave the call rather than leaving a joined background tab or Teams call window active.
-
