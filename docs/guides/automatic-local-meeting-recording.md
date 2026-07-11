@@ -136,7 +136,7 @@ Production data is stored under:
 ```text
 ~/Library/Application Support/Muesli/config.json
 ~/Library/Application Support/Muesli/muesli.db
-~/Library/Application Support/Muesli/meetings/
+~/Library/Application Support/Muesli/meeting-recordings/
 ```
 
 Development lanes use `MuesliDev`, `MuesliDevA`, `MuesliDevB`, or `MuesliDevC` in place of `Muesli`. Shared speech models normally live under:
