@@ -262,6 +262,7 @@ final class MeetingCandidateResolver {
 
     static let browserApps: [String: String] = [
         "com.google.Chrome": "Chrome",
+        "org.mozilla.firefox": "Firefox",
         "com.brave.Browser": "Brave",
         "company.thebrowser.Browser": "Arc",
         "com.microsoft.edgemac": "Edge",

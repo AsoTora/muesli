@@ -3,6 +3,7 @@ import Foundation
 enum MeetingRecordingStartOrigin: Equatable {
     case manual
     case detectedPrompt
+    case detectedAutoRecord
     case calendarAutoRecord
     case scheduledMeetingPrompt
     case joinAndRecord
@@ -11,7 +12,7 @@ enum MeetingRecordingStartOrigin: Equatable {
         switch self {
         case .manual:
             return false
-        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
+        case .detectedPrompt, .detectedAutoRecord, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
             return true
         }
     }
@@ -27,7 +28,7 @@ enum MeetingRecordingStartOrigin: Equatable {
         switch self {
         case .manual:
             return nil
-        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
+        case .detectedPrompt, .detectedAutoRecord, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
             return explicitSource ?? recentSource()
         }
     }

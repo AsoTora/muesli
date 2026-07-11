@@ -6,12 +6,13 @@ import Testing
 struct BrowserMeetingActivityCollectorTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test("ScriptingBridge browser allowlist stays aligned with meeting browser resolver")
-    func scriptingBridgeBrowserAllowlistStaysAlignedWithMeetingBrowserResolver() {
+    @Test("ScriptingBridge browser allowlist is a supported-browser subset")
+    func scriptingBridgeBrowserAllowlistIsSupportedBrowserSubset() {
         #expect(
             BrowserMeetingActivityCollector.scriptingBridgeActiveTabBrowserBundleIDs
-                == Set(MeetingCandidateResolver.browserApps.keys)
+                .isSubset(of: Set(MeetingCandidateResolver.browserApps.keys))
         )
+        #expect(!BrowserMeetingActivityCollector.scriptingBridgeActiveTabBrowserBundleIDs.contains("org.mozilla.firefox"))
     }
 
     private func chrome(isActive: Bool) -> RunningAppSnapshot {
@@ -30,6 +31,34 @@ struct BrowserMeetingActivityCollectorTests {
             processIdentifier: 4321,
             isActive: isActive
         )
+    }
+
+    private func firefox(isActive: Bool) -> RunningAppSnapshot {
+        RunningAppSnapshot(
+            bundleID: "org.mozilla.firefox",
+            appName: "Firefox",
+            processIdentifier: 9876,
+            isActive: isActive
+        )
+    }
+
+    @Test("Firefox meeting URL is collected through Accessibility document probing")
+    func firefoxMeetingURLIsCollected() async {
+        let collector = BrowserMeetingActivityCollector(
+            focusedDocumentURLProvider: { app in
+                app.bundleID == "org.mozilla.firefox" ? "https://teams.microsoft.com/l/meetup-join/abc" : nil
+            }
+        )
+
+        let meetings = await collector.collect(
+            runningApps: [firefox(isActive: true)],
+            refresh: true,
+            now: now,
+            shouldAttemptActiveTabFallback: { _ in false }
+        )
+
+        #expect(meetings.map(\.platform) == [.teams])
+        #expect(meetings.first?.bundleID == "org.mozilla.firefox")
     }
 
     @Test("refresh probes inactive uncached browsers")

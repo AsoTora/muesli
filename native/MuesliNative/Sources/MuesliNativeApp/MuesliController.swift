@@ -346,6 +346,19 @@ final class MuesliController: NSObject {
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
     private var latestMeetingActivityCandidateObservedAt: Date?
+    private lazy var detectedMeetingAutoRecordCoordinator = DetectedMeetingAutoRecordCoordinator(
+        startRecording: { [weak self] candidate in
+            guard let self else { return false }
+            return self.startForegroundMeetingRecording(
+                title: candidate.subtitle,
+                autoStopSource: MeetingAutoStopSource(candidate: candidate),
+                startOrigin: .detectedAutoRecord
+            )
+        },
+        recordingStarted: { [weak self] candidate in
+            self?.meetingMonitor.markRecordingStarted(candidate)
+        }
+    )
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
     private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
@@ -599,6 +612,7 @@ final class MuesliController: NSObject {
         meetingMonitor.detectionEnabledProvider = { [weak self] in
             guard let self else { return false }
             return self.config.showMeetingDetectionNotification
+                || self.config.autoRecordDetectedMeetings
                 || self.activeMeetingAutoStop.isArmed
         }
         meetingMonitor.mutedDetectionBundleIDsProvider = { [weak self] in
@@ -2342,6 +2356,7 @@ final class MuesliController: NSObject {
         config.showMeetingDetectionNotification
             || config.showScheduledMeetingNotifications
             || config.autoRecordMeetings
+            || config.autoRecordDetectedMeetings
     }
 
     private var shouldRunCalendarMonitor: Bool {
@@ -2350,7 +2365,9 @@ final class MuesliController: NSObject {
 
     private func syncMeetingDetectionMonitor() {
         let shouldRun = meetingFeatureMonitorsAllowed
-            && (config.showMeetingDetectionNotification || activeMeetingAutoStop.isArmed)
+            && (config.showMeetingDetectionNotification
+                || config.autoRecordDetectedMeetings
+                || activeMeetingAutoStop.isArmed)
         if shouldRun && !meetingDetectionMonitorStarted {
             meetingMonitor.start()
             meetingDetectionMonitorStarted = true
@@ -5416,6 +5433,7 @@ final class MuesliController: NSObject {
     }
 
     func stopMeetingRecording() {
+        detectedMeetingAutoRecordCoordinator.recordingDidStop()
         meetingRecordingHotkeyMonitor.cancelToggleMode()
         guard !isStoppingMeetingRecording else { return }
         guard let sessionToStop = activeMeetingSession else {
@@ -6311,6 +6329,13 @@ final class MuesliController: NSObject {
     }
 
     private func handleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        detectedMeetingAutoRecordCoordinator.observe(
+            candidate: candidate,
+            enabled: config.autoRecordDetectedMeetings,
+            isRecording: isMeetingRecording(),
+            isStarting: isStartingMeetingRecording
+        )
+
         if !activeMeetingAutoStop.isArmed,
            !isMeetingRecording(),
            !isStartingMeetingRecording {

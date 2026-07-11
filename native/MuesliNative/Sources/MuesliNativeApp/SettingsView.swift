@@ -1174,6 +1174,13 @@ struct SettingsView: View {
                     }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Auto-record detected calls") {
+                    settingsSwitch(isOn: appState.config.autoRecordDetectedMeetings) { newValue in
+                        controller.updateConfig { $0.autoRecordDetectedMeetings = newValue }
+                    }
+                }
+                settingsDescription("Automatically record attended calls detected in Chrome, Firefox, and Microsoft Teams.")
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Save meeting recording") {
                     settingsMenu(
                         selection: recordingSaveLabel(for: appState.config.meetingRecordingSavePolicy),

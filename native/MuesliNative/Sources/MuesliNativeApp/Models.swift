@@ -968,6 +968,7 @@ struct AppConfig: Codable {
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
+    var autoRecordDetectedMeetings: Bool = false
     var upcomingMeetingsDayCount: Int = UpcomingMeetingsWindow.defaultDayCount
     var showScheduledMeetingNotifications: Bool = true
     var scheduledMeetingNotificationLeadTime: ScheduledMeetingNotificationLeadTime = .atStart
@@ -1080,6 +1081,7 @@ struct AppConfig: Codable {
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
+        case autoRecordDetectedMeetings = "auto_record_detected_meetings"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
         case scheduledMeetingNotificationLeadTime = "scheduled_meeting_notification_lead_time"
@@ -1199,6 +1201,7 @@ struct AppConfig: Codable {
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
+        autoRecordDetectedMeetings = (try? c.decode(Bool.self, forKey: .autoRecordDetectedMeetings)) ?? defaults.autoRecordDetectedMeetings
         if c.contains(.upcomingMeetingsDayCount) {
             upcomingMeetingsDayCount = UpcomingMeetingsWindow
                 .resolve(dayCount: try? c.decode(Int.self, forKey: .upcomingMeetingsDayCount))

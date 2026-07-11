@@ -34,6 +34,45 @@ struct MeetingCandidateResolverTests {
         )
     }
 
+    @Test("Firefox is a supported meeting browser")
+    func firefoxIsSupportedMeetingBrowser() {
+        #expect(MeetingCandidateResolver.browserApps["org.mozilla.firefox"] == "Firefox")
+    }
+
+    @Test("Firefox Meet with input attribution resolves as attended call")
+    func firefoxMeetWithInputAttributionResolves() {
+        let candidate = resolver().resolve(snapshot(
+            micActive: false,
+            cameraActive: false,
+            browserMeetings: [
+                BrowserMeetingContext(
+                    bundleID: "org.mozilla.firefox",
+                    appName: "Firefox",
+                    pid: 4321,
+                    url: "meet.google.com/pwm-txwq-txy",
+                    normalizedID: "googleMeet:meet.google.com/pwm-txwq-txy",
+                    platform: .googleMeet,
+                    isFocused: true
+                ),
+            ],
+            audioInputProcesses: [
+                AudioProcessActivity(
+                    pid: 4321,
+                    bundleID: "org.mozilla.firefox",
+                    appName: "Firefox",
+                    isRunningInput: true,
+                    isRunningOutput: true
+                ),
+            ],
+            foregroundBundleID: "org.mozilla.firefox"
+        ))
+
+        #expect(candidate?.platform == .googleMeet)
+        #expect(candidate?.sourceBundleID == "org.mozilla.firefox")
+        #expect(candidate?.sourcePID == 4321)
+        #expect(candidate?.evidence.contains(.audioInputProcess) == true)
+    }
+
     @Test("Chrome Meet active beats background WhatsApp")
     func chromeMeetBeatsBackgroundWhatsApp() {
         let candidate = resolver().resolve(snapshot(

@@ -529,6 +529,19 @@ struct MeetingSummaryBackendTests {
 
 @Suite("AppConfig")
 struct AppConfigTests {
+    @Test("detected meeting auto-record defaults safely and round trips")
+    func detectedMeetingAutoRecordConfigRoundTrip() throws {
+        #expect(AppConfig().autoRecordDetectedMeetings == false)
+
+        var config = AppConfig()
+        config.autoRecordDetectedMeetings = true
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.autoRecordDetectedMeetings == true)
+
+        let legacy = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(legacy.autoRecordDetectedMeetings == false)
+    }
 
     @Test("default values")
     func defaults() {
