@@ -494,6 +494,23 @@ enum CustomLLMFormat: String, Codable, CaseIterable {
     }
 }
 
+enum LocalGemmaRuntime: String, Codable, CaseIterable {
+    case disabled = ""
+    case ollama = "ollama"
+    case llamaCpp = "llama_cpp"
+
+    static let ollamaModel = "gemma3:4b"
+    static let llamaCppModel = "gemma-local"
+
+    var label: String {
+        switch self {
+        case .disabled: return "Off"
+        case .ollama: return "Ollama · Gemma 3 4B"
+        case .llamaCpp: return "llama.cpp · Gemma"
+        }
+    }
+}
+
 struct PostProcessorOption: Identifiable, Equatable {
     let id: String
     let label: String
@@ -1002,6 +1019,7 @@ struct AppConfig: Codable {
     var customLLMAPIKey: String = ""
     var customLLMModel: String = ""
     var customLLMFormat: String = CustomLLMFormat.openAI.rawValue
+    var localGemmaRuntime: String = LocalGemmaRuntime.disabled.rawValue
     var summaryModel: String = ""
     var meetingSummaryModel: String = ""
     var hasCompletedOnboarding: Bool = false
@@ -1115,6 +1133,7 @@ struct AppConfig: Codable {
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMModel = "custom_llm_model"
         case customLLMFormat = "custom_llm_format"
+        case localGemmaRuntime = "local_gemma_runtime"
         case summaryModel = "summary_model"
         case meetingSummaryModel = "meeting_summary_model"
         case hasCompletedOnboarding = "has_completed_onboarding"
@@ -1267,6 +1286,10 @@ struct AppConfig: Codable {
         customLLMModel = (try? c.decode(String.self, forKey: .customLLMModel)) ?? defaults.customLLMModel
         let decodedCustomLLMFormat = (try? c.decode(String.self, forKey: .customLLMFormat)) ?? defaults.customLLMFormat
         customLLMFormat = CustomLLMFormat(rawValue: decodedCustomLLMFormat)?.rawValue ?? defaults.customLLMFormat
+        let decodedLocalGemmaRuntime = (try? c.decode(String.self, forKey: .localGemmaRuntime))
+            ?? defaults.localGemmaRuntime
+        localGemmaRuntime = LocalGemmaRuntime(rawValue: decodedLocalGemmaRuntime)?.rawValue
+            ?? defaults.localGemmaRuntime
         summaryModel = (try? c.decode(String.self, forKey: .summaryModel)) ?? defaults.summaryModel
         meetingSummaryModel = (try? c.decode(String.self, forKey: .meetingSummaryModel)) ?? defaults.meetingSummaryModel
         hasCompletedOnboarding = (try? c.decode(Bool.self, forKey: .hasCompletedOnboarding)) ?? defaults.hasCompletedOnboarding

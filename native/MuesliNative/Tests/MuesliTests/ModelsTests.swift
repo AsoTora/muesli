@@ -572,6 +572,7 @@ struct AppConfigTests {
         #expect(config.customLLMAPIKey.isEmpty)
         #expect(config.customLLMModel.isEmpty)
         #expect(config.customLLMFormat == "openai")
+        #expect(config.selectedLocalGemmaRuntime == .disabled)
         #expect(config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(config.postProcessorChatGPTModel.isEmpty)
         #expect(config.postProcessorOpenAIModel.isEmpty)
@@ -2291,5 +2292,46 @@ struct AppConfigAppearanceTests {
         let data = try JSONEncoder().encode(config)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(json?["recording_color_hex"] as? String == "eff1f5")
+    }
+
+    @Test("Ollama Gemma preset is explicit and preserves generic defaults")
+    func ollamaGemmaPreset() {
+        var config = AppConfig()
+        #expect(config.ollamaModel == "qwen3.5")
+
+        config.applyLocalGemmaPreset(.ollama)
+
+        #expect(config.selectedLocalGemmaRuntime == .ollama)
+        #expect(config.meetingSummaryBackend == MeetingSummaryBackendOption.ollama.backend)
+        #expect(config.ollamaURL == "http://localhost:11434")
+        #expect(config.ollamaModel == "gemma3:4b")
+    }
+
+    @Test("llama.cpp Gemma preset configures loopback OpenAI compatibility")
+    func llamaCppGemmaPreset() {
+        var config = AppConfig()
+        config.applyLocalGemmaPreset(.llamaCpp)
+
+        #expect(config.selectedLocalGemmaRuntime == .llamaCpp)
+        #expect(config.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+        #expect(config.customLLMFormat == CustomLLMFormat.openAI.rawValue)
+        #expect(config.customLLMURL == "http://127.0.0.1:8080/v1")
+        #expect(config.customLLMModel == "gemma-local")
+        #expect(config.customLLMAPIKey.isEmpty)
+    }
+
+    @Test("local Gemma runtime round-trips and old JSON defaults off")
+    func localGemmaCoding() throws {
+        var config = AppConfig()
+        config.applyLocalGemmaPreset(.ollama)
+        let data = try JSONEncoder().encode(config)
+        let encoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(encoded?["local_gemma_runtime"] as? String == "ollama")
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.selectedLocalGemmaRuntime == .ollama)
+
+        let oldConfig = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(oldConfig.selectedLocalGemmaRuntime == .disabled)
     }
 }

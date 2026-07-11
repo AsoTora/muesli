@@ -3,12 +3,15 @@ import MuesliCore
 import os
 
 enum MeetingSummaryError: LocalizedError {
+    case unsupportedBackend(String)
     case backendFailed(backend: String, statusCode: Int?, message: String)
     case emptyResponse(backend: String)
     case requestFailed(backend: String, underlying: Error)
 
     var errorDescription: String? {
         switch self {
+        case let .unsupportedBackend(backend):
+            return "Unsupported meeting summary backend '\(backend)'. Select a configured backend in Settings. No cloud fallback was attempted."
         case let .backendFailed(backend, statusCode, message):
             let statusText = statusCode.map { " Status \($0)." } ?? ""
             return "\(backend) could not generate meeting notes.\(statusText) \(message) The selected model may be unavailable or retired."
@@ -38,6 +41,8 @@ enum MeetingSummaryRetryPolicy {
         }
 
         switch summaryError {
+        case .unsupportedBackend:
+            return false
         case .requestFailed(let backend, let underlying):
             if isPermanentRequestFailure(underlying) {
                 return false
@@ -60,6 +65,8 @@ enum MeetingSummaryRetryPolicy {
         guard let summaryError = error as? MeetingSummaryError else { return 0 }
 
         switch summaryError {
+        case .unsupportedBackend:
+            return 0
         case .requestFailed(let backend, _),
              .emptyResponse(let backend),
              .backendFailed(let backend, _, _):
@@ -115,6 +122,18 @@ enum MeetingSummaryRetryPolicy {
 
     static func retryDelay(forAttempt attempt: Int) -> TimeInterval {
         min(pow(2.0, Double(max(attempt - 1, 0))), 8.0)
+    }
+}
+
+private final class LocalGemmaURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(MeetingSummaryClient.shouldFollowLocalGemmaRedirect(to: request.url) ? request : nil)
     }
 }
 
@@ -212,6 +231,7 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String?
     ) async throws -> String {
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
+        try validateLocalGemmaConfiguration(config)
         let generatedNotes: String
         if backend == MeetingSummaryBackendOption.chatGPT.backend {
             generatedNotes = try await summarizeWithChatGPT(
@@ -278,17 +298,20 @@ enum MeetingSummaryClient {
             )
             return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
         }
-        generatedNotes = try await summarizeWithOpenAI(
-            transcript: transcript,
-            meetingTitle: meetingTitle,
-            existingNotes: existingNotes,
-            manualNotes: manualNotesToRetain,
-            config: config,
-            template: template,
-            visualContext: visualContext,
-            previousMeetingNotes: previousMeetingNotes
-        )
-        return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
+        if backend == MeetingSummaryBackendOption.openAI.backend {
+            generatedNotes = try await summarizeWithOpenAI(
+                transcript: transcript,
+                meetingTitle: meetingTitle,
+                existingNotes: existingNotes,
+                manualNotes: manualNotesToRetain,
+                config: config,
+                template: template,
+                visualContext: visualContext,
+                previousMeetingNotes: previousMeetingNotes
+            )
+            return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
+        }
+        throw MeetingSummaryError.unsupportedBackend(config.meetingSummaryBackend)
     }
 
     static func summaryFailureNotes(transcript: String, meetingTitle: String, error: Error, manualNotes: String? = nil) -> String {
@@ -667,7 +690,10 @@ enum MeetingSummaryClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await data(
+                for: request,
+                localOnly: config.selectedLocalGemmaRuntime == .ollama
+            )
             try validateHTTPResponse(response, data: data, backend: "Ollama")
             guard
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -682,7 +708,8 @@ enum MeetingSummaryClient {
             }
             return text
         } catch {
-            throw summaryRequestError(backend: "Ollama", error: error)
+            let requestError = summaryRequestError(backend: "Ollama", error: error)
+            throw localGemmaError(requestError, config: config)
         }
     }
 
@@ -849,7 +876,10 @@ enum MeetingSummaryClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await data(
+                for: request,
+                localOnly: config.selectedLocalGemmaRuntime == .llamaCpp
+            )
             try validateHTTPResponse(response, data: data, backend: backend)
             guard
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -863,7 +893,8 @@ enum MeetingSummaryClient {
             }
             return text
         } catch {
-            throw summaryRequestError(backend: backend, error: error)
+            let requestError = summaryRequestError(backend: backend, error: error)
+            throw localGemmaError(requestError, config: config)
         }
     }
 
@@ -1059,6 +1090,118 @@ enum MeetingSummaryClient {
         )
     }
 
+    static func validateLocalGemmaConfiguration(_ config: AppConfig) throws {
+        switch config.selectedLocalGemmaRuntime {
+        case .disabled:
+            return
+        case .ollama:
+            guard config.meetingSummaryBackend == MeetingSummaryBackendOption.ollama.backend else {
+                throw MeetingSummaryError.unsupportedBackend(config.meetingSummaryBackend)
+            }
+            let rawURL = config.ollamaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let url = URL(string: rawURL.isEmpty ? defaultOllamaBaseURL.absoluteString : rawURL),
+                  isLoopbackURL(url) else {
+                throw MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (Ollama)",
+                    statusCode: nil,
+                    message: "Local Gemma only accepts loopback Ollama URLs: localhost, 127.0.0.1, or ::1."
+                )
+            }
+            let model = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard model.lowercased().contains("gemma") else {
+                throw MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (Ollama)",
+                    statusCode: nil,
+                    message: "Select a Gemma model. Recommended setup: `ollama pull \(LocalGemmaRuntime.ollamaModel)`."
+                )
+            }
+        case .llamaCpp:
+            guard config.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend,
+                  config.customLLMFormat == CustomLLMFormat.openAI.rawValue else {
+                throw MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (llama.cpp)",
+                    statusCode: nil,
+                    message: "The llama.cpp preset requires the Custom LLM OpenAI-compatible backend."
+                )
+            }
+            guard let url = resolveCustomLLMURL(config: config, format: .openAI), isLoopbackURL(url) else {
+                throw MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (llama.cpp)",
+                    statusCode: nil,
+                    message: "Local Gemma only accepts a loopback llama.cpp endpoint: localhost, 127.0.0.1, or ::1."
+                )
+            }
+            let model = config.customLLMModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard model.lowercased().contains("gemma") else {
+                throw MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (llama.cpp)",
+                    statusCode: nil,
+                    message: "Enter the Gemma model alias exposed by llama-server, for example `\(LocalGemmaRuntime.llamaCppModel)`."
+                )
+            }
+        }
+    }
+
+    static func isLoopbackURL(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host?.lowercased() else {
+            return false
+        }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    static func shouldFollowLocalGemmaRedirect(to url: URL?) -> Bool {
+        guard let url else { return false }
+        return isLoopbackURL(url)
+    }
+
+    private static func data(for request: URLRequest, localOnly: Bool) async throws -> (Data, URLResponse) {
+        guard localOnly else {
+            return try await URLSession.shared.data(for: request)
+        }
+        let session = URLSession(
+            configuration: .ephemeral,
+            delegate: LocalGemmaURLSessionDelegate(),
+            delegateQueue: nil
+        )
+        defer { session.finishTasksAndInvalidate() }
+        return try await session.data(for: request)
+    }
+
+    private static func localGemmaError(_ error: Error, config: AppConfig) -> Error {
+        guard config.selectedLocalGemmaRuntime != .disabled else { return error }
+        if let summaryError = error as? MeetingSummaryError,
+           case .backendFailed(_, let statusCode, let message) = summaryError,
+           message.localizedCaseInsensitiveContains("not found") {
+            return MeetingSummaryError.backendFailed(
+                backend: "Local Gemma",
+                statusCode: statusCode,
+                message: "Gemma is not installed in the selected runtime. For Ollama run `ollama pull \(LocalGemmaRuntime.ollamaModel)`; for llama.cpp start llama-server with a Gemma GGUF and `--alias \(LocalGemmaRuntime.llamaCppModel)`. Runtime response: \(message)"
+            )
+        }
+        if let summaryError = error as? MeetingSummaryError, case .requestFailed = summaryError {
+            switch config.selectedLocalGemmaRuntime {
+            case .ollama:
+                return MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (Ollama)",
+                    statusCode: nil,
+                    message: "Ollama is unreachable. Start it with `ollama serve`, then run `ollama pull \(LocalGemmaRuntime.ollamaModel)`."
+                )
+            case .llamaCpp:
+                return MeetingSummaryError.backendFailed(
+                    backend: "Local Gemma (llama.cpp)",
+                    statusCode: nil,
+                    message: "llama-server is unreachable. Start it on 127.0.0.1 and verify the `/v1` OpenAI-compatible endpoint."
+                )
+            case .disabled:
+                break
+            }
+        }
+        return error
+    }
+
     private static func resolveEndpointURL(_ rawURL: String, endpointSuffix: String) -> URL? {
         guard var components = URLComponents(string: rawURL.trimmingCharacters(in: .whitespacesAndNewlines)),
               components.scheme != nil,
@@ -1096,6 +1239,12 @@ enum MeetingSummaryClient {
 
     static func generateTitle(transcript: String, config: AppConfig) async -> String? {
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
+        do {
+            try validateLocalGemmaConfiguration(config)
+        } catch {
+            fputs("[summary] Local Gemma title validation failed: \(error.localizedDescription)\n", stderr)
+            return nil
+        }
 
         let excerpt = titleTranscriptExcerpt(from: transcript)
 
@@ -1131,18 +1280,23 @@ enum MeetingSummaryClient {
             return await generateTitleWithCustomLLM(transcript: excerpt, config: config)
         }
 
-        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey
-        guard !apiKey.isEmpty else { return nil }
-        let model = config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
-        return await callChatCompletions(
-            url: URL(string: "https://api.openai.com/v1/chat/completions")!,
-            apiKey: apiKey,
-            model: model,
-            systemPrompt: titleInstructions,
-            userPrompt: excerpt,
-            maxTokens: nil,
-            extraHeaders: [:]
-        )
+        if backend == MeetingSummaryBackendOption.openAI.backend {
+            let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? config.openAIAPIKey
+            guard !apiKey.isEmpty else { return nil }
+            let model = config.openAIModel.isEmpty ? defaultOpenAIModel : config.openAIModel
+            return await callChatCompletions(
+                url: URL(string: "https://api.openai.com/v1/chat/completions")!,
+                apiKey: apiKey,
+                model: model,
+                systemPrompt: titleInstructions,
+                userPrompt: excerpt,
+                maxTokens: nil,
+                extraHeaders: [:]
+            )
+        }
+
+        fputs("[summary] Unsupported title backend '\(config.meetingSummaryBackend)'; no fallback attempted.\n", stderr)
+        return nil
     }
 
     static func titleTranscriptExcerpt(from transcript: String, segmentLength: Int = 900) -> String {
@@ -1174,7 +1328,8 @@ enum MeetingSummaryClient {
     private static func callChatCompletions(
         url: URL, apiKey: String, model: String,
         systemPrompt: String, userPrompt: String,
-        maxTokens: Int?, extraHeaders: [String: String], timeout: TimeInterval? = nil
+        maxTokens: Int?, extraHeaders: [String: String], timeout: TimeInterval? = nil,
+        localOnly: Bool = false
     ) async -> String? {
         let isOpenAI = url.host?.contains("openai.com") == true
         var body: [String: Any] = [
@@ -1204,7 +1359,7 @@ enum MeetingSummaryClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, _) = try await data(for: request, localOnly: localOnly)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 fputs("[summary] title generation: invalid JSON response\n", stderr)
                 return nil
@@ -1340,7 +1495,8 @@ enum MeetingSummaryClient {
                 userPrompt: transcript,
                 maxTokens: 100,
                 extraHeaders: [:],
-                timeout: customLLMTitleTimeout
+                timeout: customLLMTitleTimeout,
+                localOnly: config.selectedLocalGemmaRuntime == .llamaCpp
             )
         case .anthropic:
             return await callAnthropicMessages(
@@ -1388,7 +1544,10 @@ enum MeetingSummaryClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await data(
+                for: request,
+                localOnly: config.selectedLocalGemmaRuntime == .ollama
+            )
             try validateHTTPResponse(response, data: data, backend: "Ollama")
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let message = json["message"] as? [String: Any],

@@ -2045,6 +2045,7 @@ final class MuesliController: NSObject {
     func selectMeetingSummaryBackend(_ option: MeetingSummaryBackendOption) {
         updateConfig {
             $0.meetingSummaryBackend = option.backend
+            $0.localGemmaRuntime = LocalGemmaRuntime.disabled.rawValue
         }
     }
 

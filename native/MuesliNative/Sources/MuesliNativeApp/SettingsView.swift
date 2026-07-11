@@ -880,6 +880,19 @@ struct SettingsView: View {
 
     private var meetingSummarySettingsSection: some View {
         settingsSection("Meeting Summaries") {
+            settingsRow(
+                "Local Gemma preset",
+                description: "Keeps titles and summaries on this Mac."
+            ) {
+                settingsMenu(
+                    selection: appState.config.selectedLocalGemmaRuntime.label,
+                    options: LocalGemmaRuntime.allCases.map(\.label)
+                ) { label in
+                    guard let runtime = LocalGemmaRuntime.allCases.first(where: { $0.label == label }) else { return }
+                    controller.updateConfig { $0.applyLocalGemmaPreset(runtime) }
+                }
+            }
+            Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Summary backend", controlWidth: meetingControlWidth) {
                 settingsMenu(
                     selection: appState.selectedMeetingSummaryBackend.label,
@@ -921,6 +934,17 @@ struct SettingsView: View {
                 }
                 keyStatusRow(key: appState.config.openAIAPIKey)
             } else if appState.selectedMeetingSummaryBackend == .ollama {
+                if appState.config.selectedLocalGemmaRuntime == .ollama {
+                    settingsRow(
+                        "Local-only",
+                        description: "Only localhost, 127.0.0.1, and ::1 are allowed."
+                    ) {
+                        Text("Enabled")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(MuesliTheme.success)
+                    }
+                    Divider().background(MuesliTheme.surfaceBorder)
+                }
                 settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
                     PastableTextField(
                         text: appState.config.ollamaURL,
@@ -953,6 +977,16 @@ struct SettingsView: View {
                     ) { val in controller.updateConfig { $0.lmStudioModel = val } }
                 }
             } else if appState.selectedMeetingSummaryBackend == .customLLM {
+                if appState.config.selectedLocalGemmaRuntime == .llamaCpp {
+                    settingsRow(
+                        "Local-only",
+                        description: "llama.cpp must use a loopback OpenAI-compatible endpoint."
+                    ) {
+                        Text("Enabled")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(MuesliTheme.success)
+                    }
+                }
                 customLLMSettingsRows(model: appState.config.customLLMModel) {
                     val in controller.updateConfig { $0.customLLMModel = val }
                 }

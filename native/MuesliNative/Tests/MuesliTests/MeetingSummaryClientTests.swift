@@ -975,4 +975,84 @@ struct MeetingSummaryClientTests {
 
         #expect(title == nil)
     }
+
+    @Test("unknown summary backend fails closed")
+    func unknownBackendFailsClosed() async {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "typo-cloud-provider"
+        config.openAIAPIKey = "must-not-be-used"
+        config.meetingSummaryRetryCount = 0
+
+        do {
+            _ = try await MeetingSummaryClient.summarize(
+                transcript: "private transcript",
+                meetingTitle: "Private meeting",
+                config: config
+            )
+            Issue.record("Expected unsupported backend error")
+        } catch let error as MeetingSummaryError {
+            guard case .unsupportedBackend(let backend) = error else {
+                Issue.record("Expected unsupportedBackend, got \(error)")
+                return
+            }
+            #expect(backend == "typo-cloud-provider")
+            #expect(error.localizedDescription.contains("No cloud fallback"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("local Gemma accepts only exact loopback hosts")
+    func localGemmaLoopbackValidation() throws {
+        for value in [
+            "http://localhost:11434",
+            "http://127.0.0.1:11434",
+            "http://[::1]:11434",
+        ] {
+            var config = AppConfig()
+            config.applyLocalGemmaPreset(.ollama)
+            config.ollamaURL = value
+            try MeetingSummaryClient.validateLocalGemmaConfiguration(config)
+        }
+
+        for value in [
+            "https://ollama.example.com",
+            "http://localhost.example.com:11434",
+            "http://127.0.0.2:11434",
+        ] {
+            var config = AppConfig()
+            config.applyLocalGemmaPreset(.ollama)
+            config.ollamaURL = value
+            #expect(throws: MeetingSummaryError.self) {
+                try MeetingSummaryClient.validateLocalGemmaConfiguration(config)
+            }
+        }
+    }
+
+    @Test("local Gemma rejects redirects away from loopback")
+    func localGemmaRedirectPolicy() {
+        #expect(MeetingSummaryClient.shouldFollowLocalGemmaRedirect(to: URL(string: "http://127.0.0.1:8080/v1")))
+        #expect(MeetingSummaryClient.shouldFollowLocalGemmaRedirect(to: URL(string: "http://localhost:11434/api/chat")))
+        #expect(!MeetingSummaryClient.shouldFollowLocalGemmaRedirect(to: URL(string: "https://api.openai.com/v1")))
+        #expect(!MeetingSummaryClient.shouldFollowLocalGemmaRedirect(to: URL(string: "http://localhost.example.com")))
+    }
+
+    @Test("local Gemma validates matching runtime and Gemma model")
+    func localGemmaRuntimeMatching() throws {
+        var ollama = AppConfig()
+        ollama.applyLocalGemmaPreset(.ollama)
+        try MeetingSummaryClient.validateLocalGemmaConfiguration(ollama)
+        ollama.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        #expect(throws: MeetingSummaryError.self) {
+            try MeetingSummaryClient.validateLocalGemmaConfiguration(ollama)
+        }
+
+        var llamaCpp = AppConfig()
+        llamaCpp.applyLocalGemmaPreset(.llamaCpp)
+        try MeetingSummaryClient.validateLocalGemmaConfiguration(llamaCpp)
+        llamaCpp.customLLMURL = "https://models.example.com/v1"
+        #expect(throws: MeetingSummaryError.self) {
+            try MeetingSummaryClient.validateLocalGemmaConfiguration(llamaCpp)
+        }
+    }
 }

@@ -72,6 +72,8 @@ Start a meeting recording → Muesli captures your mic (You) and system audio (O
 
 ## Install
 
+For the AsoTora fork's attended-call auto-recording and fully local Gemma summary workflow, see [Automatic local meeting recording](docs/guides/automatic-local-meeting-recording.md).
+
 ### Download (recommended)
 
 Download the latest `.dmg` from [Releases](https://github.com/Muesli-HQ/muesli/releases), open it, and drag Muesli to Applications — or double-click to install automatically.
