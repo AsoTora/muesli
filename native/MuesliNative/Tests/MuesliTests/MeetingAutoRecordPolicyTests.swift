@@ -53,4 +53,23 @@ struct MeetingAutoRecordPolicyTests {
         _ = policy.evaluate(candidate: nil, now: now.addingTimeInterval(2), enabled: true, isRecording: false, isStarting: false)
         #expect(policy.evaluate(candidate: meeting, now: now.addingTimeInterval(3), enabled: true, isRecording: false, isStarting: false) == .none)
     }
+
+    @Test("completed session requires an idle gap before it can start again")
+    func completedSessionRequiresIdleGap() {
+        var policy = MeetingAutoRecordPolicy(
+            stabilizationInterval: 0,
+            failedStartCooldown: 30,
+            sessionResetInterval: 10
+        )
+        let meeting = candidate()
+        #expect(policy.evaluate(candidate: meeting, now: now, enabled: true, isRecording: false, isStarting: false) == .start(meeting))
+        policy.recordingDidStart(meeting)
+        policy.recordingDidStop()
+
+        _ = policy.evaluate(candidate: nil, now: now.addingTimeInterval(1), enabled: true, isRecording: false, isStarting: false)
+        #expect(policy.evaluate(candidate: meeting, now: now.addingTimeInterval(5), enabled: true, isRecording: false, isStarting: false) == .none)
+        _ = policy.evaluate(candidate: nil, now: now.addingTimeInterval(6), enabled: true, isRecording: false, isStarting: false)
+        _ = policy.evaluate(candidate: nil, now: now.addingTimeInterval(16), enabled: true, isRecording: false, isStarting: false)
+        #expect(policy.evaluate(candidate: meeting, now: now.addingTimeInterval(16), enabled: true, isRecording: false, isStarting: false) == .start(meeting))
+    }
 }
