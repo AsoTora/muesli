@@ -2,6 +2,92 @@ import AppKit
 import Foundation
 import MuesliCore
 
+enum MenuBarRecorderBadge: Equatable {
+    case gray
+    case green
+    case red
+    case orange
+
+    var color: NSColor {
+        switch self {
+        case .gray:
+            return .tertiaryLabelColor
+        case .green:
+            return .systemGreen
+        case .red:
+            return .systemRed
+        case .orange:
+            return .systemOrange
+        }
+    }
+}
+
+enum MenuBarRecorderStatus: Equatable {
+    case disabled
+    case monitoring
+    case recording
+    case paused
+
+    static func resolve(
+        calendarAutoRecordEnabled: Bool,
+        detectedAutoRecordEnabled: Bool,
+        isRecording: Bool,
+        isPaused: Bool
+    ) -> Self {
+        if isRecording {
+            return isPaused ? .paused : .recording
+        }
+        return calendarAutoRecordEnabled || detectedAutoRecordEnabled ? .monitoring : .disabled
+    }
+
+    var label: String {
+        switch self {
+        case .disabled:
+            return "Off"
+        case .monitoring:
+            return "Monitoring"
+        case .recording:
+            return "Recording"
+        case .paused:
+            return "Paused"
+        }
+    }
+
+    var badge: MenuBarRecorderBadge {
+        switch self {
+        case .disabled:
+            return .gray
+        case .monitoring:
+            return .green
+        case .recording:
+            return .red
+        case .paused:
+            return .orange
+        }
+    }
+
+    func attributedMenuBarTitle(trailingText: String) -> NSAttributedString {
+        let title = NSMutableAttributedString(
+            string: "●",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 8, weight: .bold),
+                .foregroundColor: badge.color,
+                .baselineOffset: 1,
+            ]
+        )
+        if !trailingText.isEmpty {
+            title.append(NSAttributedString(
+                string: trailingText,
+                attributes: [
+                    .font: NSFont.menuBarFont(ofSize: 0),
+                    .foregroundColor: NSColor.labelColor,
+                ]
+            ))
+        }
+        return title
+    }
+}
+
 final class CalendarMenuMeetingPayload: NSObject {
     let title: String
     let calendarEventID: String
@@ -46,11 +132,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func setCountdownOverride(_ text: String?) {
         countdownOverride = text
-        if let text {
-            statusItem.button?.title = text
-        } else {
-            updateMenuBarTitle()
-        }
+        updateMenuBarTitle()
     }
 
     func refreshIcon() {
@@ -59,35 +141,40 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func updateMenuBarTitle() {
+        let trailingText: String
         if let countdownOverride {
-            statusItem.button?.title = countdownOverride
-            return
-        }
-        guard controller.config.showNextMeetingInMenuBar else {
-            statusItem.button?.title = ""
-            return
-        }
+            trailingText = countdownOverride
+        } else if controller.config.showNextMeetingInMenuBar {
+            let now = Date()
+            let hidden = controller.appState.hiddenCalendarEventIDs
+            let endOfToday = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now)) ?? now
+            let nextEvent = controller.appState.upcomingCalendarEvents
+                .filter { !$0.isAllDay && $0.startDate > now && $0.startDate < endOfToday && !hidden.contains($0.id) }
+                .sorted { $0.startDate < $1.startDate }
+                .first
 
-        let now = Date()
-        let hidden = controller.appState.hiddenCalendarEventIDs
-        let endOfToday = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now)) ?? now
-        let nextEvent = controller.appState.upcomingCalendarEvents
-            .filter { !$0.isAllDay && $0.startDate > now && $0.startDate < endOfToday && !hidden.contains($0.id) }
-            .sorted { $0.startDate < $1.startDate }
-            .first
-
-        if let event = nextEvent {
-            let minutesUntil = Int(ceil(event.startDate.timeIntervalSince(now) / 60))
-            let truncatedTitle = event.title.count > 20
-                ? String(event.title.prefix(18)) + "…"
-                : event.title
-            if minutesUntil <= 60 {
-                statusItem.button?.title = " \(truncatedTitle) · \(formatTimeUntil(minutesUntil))"
+            if let event = nextEvent {
+                let minutesUntil = Int(ceil(event.startDate.timeIntervalSince(now) / 60))
+                let truncatedTitle = event.title.count > 20
+                    ? String(event.title.prefix(18)) + "…"
+                    : event.title
+                if minutesUntil <= 60 {
+                    trailingText = " \(truncatedTitle) · \(formatTimeUntil(minutesUntil))"
+                } else {
+                    trailingText = " \(truncatedTitle)"
+                }
             } else {
-                statusItem.button?.title = " \(truncatedTitle)"
+                trailingText = ""
             }
         } else {
-            statusItem.button?.title = ""
+            trailingText = ""
+        }
+
+        let status = recorderStatus
+        if let button = statusItem.button {
+            button.attributedTitle = status.attributedMenuBarTitle(trailingText: trailingText)
+            button.toolTip = "\(AppIdentity.displayName) is running · Automatic recorder: \(status.label)"
+            button.setAccessibilityLabel("\(AppIdentity.displayName), automatic recorder \(status.label)")
         }
     }
 
@@ -95,7 +182,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if let button = statusItem.button {
             button.image = MenuBarIconRenderer.make(choice: controller.config.menuBarIcon)
             button.imageScaling = .scaleProportionallyDown
-            button.toolTip = AppIdentity.displayName
         }
         rebuildMenu()
         updateMenuBarTitle()
@@ -104,6 +190,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func rebuildMenu() {
         menu.removeAllItems()
+
+        menu.addItem(recorderStatusItem())
+        let calendarAutoRecordItem = actionItem(
+            title: "Auto-record calendar meetings",
+            action: #selector(MuesliController.toggleCalendarMeetingAutoRecord)
+        )
+        calendarAutoRecordItem.state = controller.config.autoRecordMeetings ? .on : .off
+        menu.addItem(calendarAutoRecordItem)
+        let detectedAutoRecordItem = actionItem(
+            title: "Auto-record detected calls",
+            action: #selector(MuesliController.toggleDetectedMeetingAutoRecord)
+        )
+        detectedAutoRecordItem.state = controller.config.autoRecordDetectedMeetings ? .on : .off
+        menu.addItem(detectedAutoRecordItem)
+        menu.addItem(.separator())
 
         // Upcoming calendar events
         let hidden = controller.appState.hiddenCalendarEventIDs
@@ -281,6 +382,37 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private func actionItem(title: String, action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = controller
+        return item
+    }
+
+    private var recorderStatus: MenuBarRecorderStatus {
+        MenuBarRecorderStatus.resolve(
+            calendarAutoRecordEnabled: controller.config.autoRecordMeetings,
+            detectedAutoRecordEnabled: controller.config.autoRecordDetectedMeetings,
+            isRecording: controller.isMeetingRecording(),
+            isPaused: controller.isMeetingRecordingPaused()
+        )
+    }
+
+    private func recorderStatusItem() -> NSMenuItem {
+        let status = recorderStatus
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        let title = NSMutableAttributedString(
+            string: "● ",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .bold),
+                .foregroundColor: status.badge.color,
+            ]
+        )
+        title.append(NSAttributedString(
+            string: "\(AppIdentity.displayName) is running · Automatic recorder: \(status.label)",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        ))
+        item.attributedTitle = title
         return item
     }
 

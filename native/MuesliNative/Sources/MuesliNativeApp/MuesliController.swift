@@ -4296,6 +4296,14 @@ final class MuesliController: NSObject {
         }
     }
 
+    @objc func toggleCalendarMeetingAutoRecord() {
+        updateConfig { $0.autoRecordMeetings.toggle() }
+    }
+
+    @objc func toggleDetectedMeetingAutoRecord() {
+        updateConfig { $0.autoRecordDetectedMeetings.toggle() }
+    }
+
     func pauseMeetingRecording() {
         guard let activeMeetingSession,
               activeMeetingSession.isRecording,
