@@ -3235,6 +3235,11 @@ final class MuesliController: NSObject {
         summaryBackend: MeetingSummaryBackendOption?,
         apiKey: String?
     ) {
+        // Dismiss first so synchronous config/runtime side effects cannot leave
+        // a completed onboarding window blocking the app.
+        onboardingWindowController?.close()
+        onboardingWindowController = nil
+
         updateConfig { config in
             config.hasCompletedOnboarding = true
             config.userName = userName
@@ -3269,8 +3274,6 @@ final class MuesliController: NSObject {
         dictationTestBackend = nil
         dictationTestCohereLanguage = nil
 
-        onboardingWindowController?.close()
-        onboardingWindowController = nil
         if hasRequiredStartupPermissions(for: onboardingUseCase) {
             meetingFeatureMonitorsAllowed = true
             if onboardingUseCase.includesPushToTalk {
