@@ -82,4 +82,38 @@ struct MeetingTranscriptHealthMonitorTests {
 
         #expect(snapshot.action == .fullFallback(reason: "no_live_segments"))
     }
+
+    @Test("repairs gaps without replacing a partial Russian live transcript")
+    func repairsGapsWithoutReplacingPartialRussianLiveTranscript() {
+        let liveSystemSegments = [
+            SpeechSegment(
+                start: 0.0,
+                end: 2.8,
+                text: "Хорошего вечера, до встречи."
+            )
+        ]
+        let offline = [
+            VadSegment(startTime: 0.0, endTime: 3.0),
+            VadSegment(startTime: 4.0, endTime: 7.0),
+            VadSegment(startTime: 8.0, endTime: 11.0)
+        ]
+
+        let snapshot = MeetingTranscriptHealthMonitor.evaluate(
+            existingSegments: liveSystemSegments,
+            offlineSpeechSegments: offline,
+            chunkHealth: MeetingTranscriptChunkHealthSnapshot(
+                successfulChunkCount: 1,
+                emptyChunkCount: 1,
+                failedChunkCount: 1
+            )
+        )
+
+        switch snapshot.action {
+        case .selectiveRepair(let segments):
+            #expect(segments.map(\.startTime) == [4.0, 8.0])
+            #expect(segments.map(\.endTime) == [7.0, 11.0])
+        default:
+            Issue.record("Expected selective repair to preserve the live Russian segment")
+        }
+    }
 }

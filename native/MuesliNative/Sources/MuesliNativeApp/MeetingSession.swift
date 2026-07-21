@@ -130,10 +130,24 @@ enum MeetingProcessingStage {
     case summarizingNotes
 }
 
-private enum MeetingTranscriptRecoveryResult {
+enum MeetingTranscriptRecoveryResult {
     case none
     case append([SpeechSegment])
     case replace([SpeechSegment])
+
+    /// Live chunks have already been shown to the user and checkpointed as accepted
+    /// transcript evidence. Recovery may fill gaps, but it must never replace that
+    /// evidence with a lower-quality full-session transcription.
+    func applying(to existingSegments: [SpeechSegment]) -> [SpeechSegment] {
+        switch self {
+        case .none:
+            return existingSegments
+        case .append(let repairedSegments):
+            return existingSegments + repairedSegments
+        case .replace(let fallbackSegments):
+            return existingSegments.isEmpty ? fallbackSegments : existingSegments
+        }
+    }
 }
 
 final class MeetingSession {
@@ -464,24 +478,11 @@ final class MeetingSession {
                 meetingStart: meetingStart,
                 endTime: endTime
             )
-            switch systemRecovery {
-            case .none:
-                break
-            case .append(let repairedSystemSegments):
-                systemSegments.append(contentsOf: repairedSystemSegments)
-                systemSegments.sort { lhs, rhs in
-                    if lhs.start == rhs.start {
-                        return lhs.text < rhs.text
-                    }
-                    return lhs.start < rhs.start
+            systemSegments = systemRecovery.applying(to: systemSegments).sorted { lhs, rhs in
+                if lhs.start == rhs.start {
+                    return lhs.text < rhs.text
                 }
-            case .replace(let fallbackSystemSegments):
-                systemSegments = fallbackSystemSegments.sorted { lhs, rhs in
-                    if lhs.start == rhs.start {
-                        return lhs.text < rhs.text
-                    }
-                    return lhs.start < rhs.start
-                }
+                return lhs.start < rhs.start
             }
         }
 

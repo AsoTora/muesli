@@ -122,6 +122,9 @@ enum MeetingTranscriptHealthMonitor {
             existingSegments: existingSegments,
             offlineSpeechSegments: evaluatedSpeechSegments
         )
+        let repairOrAccept: MeetingTranscriptRecoveryAction = coverage.repairCandidates.isEmpty
+            ? .accept
+            : .selectiveRepair(coverage.repairCandidates)
 
         let action: MeetingTranscriptRecoveryAction
         if coverage.totalEvaluatedSpeechDuration < minimumFallbackSpeechDuration {
@@ -129,20 +132,18 @@ enum MeetingTranscriptHealthMonitor {
         } else if existingSegments.isEmpty {
             action = .fullFallback(reason: "no_live_segments")
         } else if coverage.speechCoverageRatio < fullFallbackCoverageThreshold {
-            action = .fullFallback(reason: "low_speech_coverage")
+            action = repairOrAccept
         } else if coverage.uncoveredSpeechDuration >= max(
             widespreadUncoveredSpeechThreshold,
             coverage.totalEvaluatedSpeechDuration * widespreadUncoveredSpeechFraction
         ) {
-            action = .fullFallback(reason: "widespread_uncovered_speech")
+            action = repairOrAccept
         } else if chunkHealth.attemptedChunkCount >= minimumChunksForSystemicFailure,
                   chunkHealth.failedChunkRate >= systemicFailureRateThreshold,
                   coverage.speechCoverageRatio < degradedCoverageThreshold {
-            action = .fullFallback(reason: "systemic_chunk_failures")
-        } else if !coverage.repairCandidates.isEmpty {
-            action = .selectiveRepair(coverage.repairCandidates)
+            action = repairOrAccept
         } else {
-            action = .accept
+            action = repairOrAccept
         }
 
         return MeetingTranscriptHealthSnapshot(

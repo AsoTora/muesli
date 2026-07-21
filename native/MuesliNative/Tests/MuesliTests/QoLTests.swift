@@ -247,6 +247,61 @@ struct DictationStateIdleTests {
 
 // MARK: - Meeting chunk collection
 
+@Suite("Meeting transcript recovery result")
+struct MeetingTranscriptRecoveryResultTests {
+    private let live = [
+        SpeechSegment(start: 1, end: 2, text: "Точный текст из прямой расшифровки")
+    ]
+    private let repair = [
+        SpeechSegment(start: 3, end: 4, text: "Recovered gap")
+    ]
+    private let fallback = [
+        SpeechSegment(start: 1, end: 4, text: "Mm-hmm")
+    ]
+
+    @Test("none keeps live segments unchanged")
+    func noneKeepsLiveSegments() {
+        assertSegments(
+            MeetingTranscriptRecoveryResult.none.applying(to: live),
+            equalTo: live
+        )
+    }
+
+    @Test("append preserves live segments and adds repaired gaps")
+    func appendPreservesLiveSegments() {
+        assertSegments(
+            MeetingTranscriptRecoveryResult.append(repair).applying(to: live),
+            equalTo: live + repair
+        )
+    }
+
+    @Test("replacement cannot overwrite non-empty live segments")
+    func replacementCannotOverwriteLiveSegments() {
+        assertSegments(
+            MeetingTranscriptRecoveryResult.replace(fallback).applying(to: live),
+            equalTo: live
+        )
+    }
+
+    @Test("replacement supplies a transcript when no live segments exist")
+    func replacementSuppliesMissingTranscript() {
+        assertSegments(
+            MeetingTranscriptRecoveryResult.replace(fallback).applying(to: []),
+            equalTo: fallback
+        )
+    }
+
+    private func assertSegments(
+        _ actual: [SpeechSegment],
+        equalTo expected: [SpeechSegment],
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        #expect(actual.map(\.start) == expected.map(\.start), sourceLocation: sourceLocation)
+        #expect(actual.map(\.end) == expected.map(\.end), sourceLocation: sourceLocation)
+        #expect(actual.map(\.text) == expected.map(\.text), sourceLocation: sourceLocation)
+    }
+}
+
 @Suite("Meeting chunk collection")
 struct MeetingChunkCollectorTests {
 
