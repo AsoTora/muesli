@@ -89,7 +89,7 @@ Live transcription is off by default. Choose Apple Speech, or download Parakeet 
 - **Personal dictionary** — Add custom words, phrase matches, and replacement pairs. Jaro-Winkler fuzzy matching auto-corrects transcription output.
 - **Model management** — Download, delete, and switch between models from the Models tab. Background downloads that don't block the app.
 - **Configurable hotkeys** — Choose any modifier key (Cmd, Option, Ctrl, Fn, Shift) for dictation.
-- **Onboarding** — First-launch wizard with model selection, real OS permission verification, hotkey configuration, smoother Accessibility handoff, live dictation test to verify the full pipeline works, and optional summary setup for ChatGPT, OpenAI, Claude Code, OpenRouter, or Ollama. Progress saved on every step — survives crashes and manual quits.
+- **Onboarding** — First-launch wizard with model selection, real OS permission verification, hotkey configuration, smoother Accessibility handoff, live dictation test to verify the full pipeline works, and optional summary setup for ChatGPT, OpenAI, OpenRouter, or Ollama. Claude Code is offered when its CLI is already installed, with a sign-in status check. Progress saved on every step — survives crashes and manual quits.
 - **Launch at Login** — Start Muesli automatically with macOS login items, with approval-state refresh in Settings.
 - **Dark & light mode** — Adaptive theme with toggle in sidebar.
 - **SwiftUI dashboard** — Dictation history, meeting notes (Notes-style split view), meeting folders, dictionary, models, shortcuts, settings, about page.
@@ -242,7 +242,7 @@ Generate markdown notes with the configured API/local summary backend when avail
 muesli-cli transcribe interview.mp4 --summarize --format markdown --output notes.md
 ```
 
-`--summarize` uses configured Claude Code, OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. To use Claude Code, install and sign in to the `claude` CLI, then select **Claude Code** under Settings → Meeting Summaries. Set an executable path there if the app cannot find it automatically. Muesli passes the prompt on stdin, disables Claude's tools and MCP servers for this call, and does not save a Claude session. Your Claude Code user settings, including any configured provider or hooks, still apply. If the configured backend is unavailable in headless CLI mode, Muesli keeps the transcript and reports a warning instead of discarding the transcription.
+`--summarize` uses configured Claude Code, OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM settings. When Claude Code is already installed, Muesli offers it under Settings → Meeting Summaries. Muesli passes the prompt on stdin, disables Claude's tools and MCP servers for this call, and does not save a Claude session. Your Claude Code user settings, including any configured provider or hooks, still apply. If the configured backend is unavailable in headless CLI mode, Muesli keeps the transcript and reports a warning instead of discarding the transcription.
 
 Save the import into Muesli as `source = audio_import`:
 

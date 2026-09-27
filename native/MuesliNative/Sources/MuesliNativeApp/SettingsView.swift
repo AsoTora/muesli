@@ -1770,7 +1770,10 @@ struct SettingsView: View {
             ) {
                 settingsMenu(
                     selection: appState.selectedMeetingSummaryBackend.label,
-                    options: MeetingSummaryBackendOption.all.map(\.label)
+                    options: MeetingSummaryBackendOption.selectable(
+                        config: appState.config,
+                        selected: appState.selectedMeetingSummaryBackend
+                    ).map(\.label)
                 ) { label in
                     if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
                         controller.selectMeetingSummaryBackend(option)

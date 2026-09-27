@@ -21,6 +21,7 @@ struct OnboardingView: View {
     @State private var openRouterSignInDone = false
     @State private var openRouterSignInError: String?
     @State private var isEnteringOpenRouterAPIKey = false
+    @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
 
     // Permission states — polled from OS every second
     @State private var micGranted = false
@@ -156,7 +157,12 @@ struct OnboardingView: View {
         _selectedBackend = State(initialValue: sanitizedInitialBackend)
         _selectedCohereLanguage = State(initialValue: initialCohereLanguage)
         _selectedHotkey = State(initialValue: initialHotkey)
-        _summaryBackend = State(initialValue: initialSummaryBackend)
+        let claudeCodeInstalled = ClaudeCodeSummarizer.executableURL(
+            configuredPath: appState.config.claudeCodeExecutablePath
+        ) != nil
+        _summaryBackend = State(initialValue:
+            initialSummaryBackend == .claudeCode && !claudeCodeInstalled ? .chatGPT : initialSummaryBackend
+        )
         _modelDownloadProgress = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadProgress : nil)
         _modelDownloadStatus = State(initialValue: sanitizedInitialBackend == initialBackend ? initialModelDownloadStatus : nil)
         _micGranted = State(initialValue: initialMicGranted)
@@ -313,8 +319,15 @@ struct OnboardingView: View {
             }
         case 5:
             HStack(spacing: MuesliTheme.spacing12) {
-                skipButton { goToNextStep() }
-                onboardingButton("Continue", enabled: true) { goToNextStep() }
+                skipButton {
+                    if summaryBackend == .claudeCode && claudeCodeAuthStatus != .signedIn {
+                        summaryBackend = .chatGPT
+                    }
+                    goToNextStep()
+                }
+                onboardingButton("Continue", enabled: summaryBackend != .claudeCode || claudeCodeAuthStatus == .signedIn) {
+                    goToNextStep()
+                }
             }
         case 6:
             HStack(spacing: MuesliTheme.spacing12) {
@@ -1663,9 +1676,11 @@ struct OnboardingView: View {
                     summaryBackend = .openAI
                     apiKey = ""
                 }
-                providerTab("Claude Code", selected: summaryBackend == .claudeCode) {
-                    summaryBackend = .claudeCode
-                    apiKey = ""
+                if ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) != nil {
+                    providerTab("Claude Code", selected: summaryBackend == .claudeCode) {
+                        summaryBackend = .claudeCode
+                        apiKey = ""
+                    }
                 }
                 providerTab("OpenRouter", selected: summaryBackend == .openRouter) {
                     summaryBackend = .openRouter
@@ -1682,7 +1697,7 @@ struct OnboardingView: View {
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
-            .frame(width: 420)
+            .frame(width: ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) == nil ? 320 : 420)
 
             if summaryBackend == .chatGPT {
                 Text("Use your ChatGPT Plus or Pro subscription.")
@@ -1744,16 +1759,36 @@ struct OnboardingView: View {
                     }
                 }
             } else if summaryBackend == .claudeCode {
-                Text("Use your installed Claude Code CLI and its existing sign-in. The meeting prompt is sent through your Claude account or configured proxy; Claude does not run on-device.")
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                Text(ClaudeCodeSummarizer.executableURL() == nil
-                     ? "Install and sign in to Claude Code, then choose its executable in Meeting Summary settings."
-                     : "Claude Code executable found. Make sure you have signed in using the claude command.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .multilineTextAlignment(.center)
+                VStack(spacing: MuesliTheme.spacing12) {
+                    Text("Use your existing Claude Code sign-in. Meeting prompts go through your Claude account or configured proxy; the model does not run on-device.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+
+                    if let claudeCodeAuthStatus {
+                        switch claudeCodeAuthStatus {
+                        case .signedIn:
+                            Label("Claude Code is signed in and ready", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(MuesliTheme.success)
+                        case .signedOut:
+                            Text("Sign in through Claude Code in Terminal, then check again.")
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                            Button("Copy sign-in command") { copyClaudeCodeSignInCommand() }
+                            Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
+                        case .unknown:
+                            Text("Muesli could not check Claude Code's sign-in status.")
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                            Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
+                        case .unavailable:
+                            EmptyView()
+                        }
+                    } else {
+                        ProgressView("Checking Claude Code sign-in…")
+                    }
+                }
+                .font(MuesliTheme.caption())
+                .buttonStyle(.plain)
+                .task { await refreshClaudeCodeAuthStatus() }
             } else if summaryBackend == .ollama {
                 Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
                     .font(MuesliTheme.caption())
@@ -1891,6 +1926,28 @@ struct OnboardingView: View {
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
         .buttonStyle(.plain)
+    }
+
+    @MainActor
+    private func refreshClaudeCodeAuthStatus() async {
+        claudeCodeAuthStatus = nil
+        let status = await ClaudeCodeSummarizer.authenticationStatus(
+            executablePath: appState.config.claudeCodeExecutablePath
+        )
+        if status == .unavailable {
+            summaryBackend = .chatGPT
+        } else {
+            claudeCodeAuthStatus = status
+        }
+    }
+
+    private func copyClaudeCodeSignInCommand() {
+        guard let executable = ClaudeCodeSummarizer.executableURL(
+            configuredPath: appState.config.claudeCodeExecutablePath
+        ) else { return }
+        let quotedPath = "'" + executable.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("\(quotedPath) auth login", forType: .string)
     }
 
     // MARK: - Actions

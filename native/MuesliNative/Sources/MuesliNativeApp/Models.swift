@@ -1122,6 +1122,12 @@ struct MeetingSummaryBackendOption: Equatable {
 
     static let all: [MeetingSummaryBackendOption] = [.chatGPT, .openAI, .claudeCode, .openRouter, .ollama, .lmStudio, .customLLM]
 
+    static func selectable(config: AppConfig, selected: MeetingSummaryBackendOption? = nil) -> [MeetingSummaryBackendOption] {
+        guard ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) == nil,
+              selected != .claudeCode else { return all }
+        return all.filter { $0 != .claudeCode }
+    }
+
     static func resolved(_ backend: String?) -> MeetingSummaryBackendOption {
         guard let backend, let option = all.first(where: { $0.backend == backend }) else {
             return .chatGPT

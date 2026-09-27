@@ -959,6 +959,24 @@ struct MeetingSummaryBackendTests {
         #expect(MeetingSummaryBackendOption.resolved(nil) == .chatGPT)
     }
 
+    @Test("Claude Code is offered only when its executable is available")
+    func claudeCodeVisibility() throws {
+        var config = AppConfig()
+        config.claudeCodeExecutablePath = "/missing/muesli-test-claude"
+        #expect(!MeetingSummaryBackendOption.selectable(config: config).contains(.claudeCode))
+        #expect(MeetingSummaryBackendOption.selectable(config: config, selected: .claudeCode).contains(.claudeCode))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-claude-visibility-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("claude")
+        try "#!/bin/sh\nexit 0\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        config.claudeCodeExecutablePath = executable.path
+        #expect(MeetingSummaryBackendOption.selectable(config: config).contains(.claudeCode))
+    }
+
     @Test("Custom LLM format labels")
     func customLLMFormatLabels() {
         #expect(CustomLLMFormat.openAI.label == "OpenAI-compatible")

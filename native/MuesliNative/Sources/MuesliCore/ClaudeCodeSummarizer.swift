@@ -1,5 +1,12 @@
 import Foundation
 
+public enum ClaudeCodeAuthenticationStatus: Equatable {
+    case unavailable
+    case signedIn
+    case signedOut
+    case unknown
+}
+
 public enum ClaudeCodeSummaryError: LocalizedError {
     case unavailable
     case inputTooLarge
@@ -10,7 +17,7 @@ public enum ClaudeCodeSummaryError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unavailable:
-            return "Claude Code was not found. Install Claude Code and sign in, or set its executable path in Meeting Summary settings."
+            return "Claude Code could not be found at the configured executable path."
         case .inputTooLarge:
             return "The meeting prompt exceeds Claude Code's 10 MB stdin limit."
         case .timedOut:
@@ -44,6 +51,39 @@ public enum ClaudeCodeSummarizer {
             if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
         }
         return nil
+    }
+
+    /// Checks the CLI's own login state without starting a model request.
+    public static func authenticationStatus(executablePath: String = "") async -> ClaudeCodeAuthenticationStatus {
+        guard let executable = executableURL(configuredPath: executablePath) else { return .unavailable }
+        return await Task.detached(priority: .utility) {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = ["auth", "status"]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let deadline = Date().addingTimeInterval(5)
+            let timeoutWork = DispatchWorkItem {
+                if process.isRunning { process.terminate() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                }
+            }
+            do {
+                try process.run()
+            } catch {
+                return .unknown
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeoutWork)
+            process.waitUntilExit()
+            timeoutWork.cancel()
+            if Date() >= deadline { return .unknown }
+            switch process.terminationStatus {
+            case 0: return .signedIn
+            case 1: return .signedOut
+            default: return .unknown
+            }
+        }.value
     }
 
     public static func run(

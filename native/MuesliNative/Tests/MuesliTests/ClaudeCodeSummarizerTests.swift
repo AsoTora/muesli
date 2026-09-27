@@ -45,8 +45,26 @@ struct ClaudeCodeSummarizerTests {
             )
             Issue.record("Expected missing executable failure")
         } catch {
-            #expect(error.localizedDescription.contains("Claude Code was not found"))
+            #expect(error.localizedDescription.contains("Claude Code could not be found"))
         }
+    }
+
+    @Test("sign-in checks use the installed CLI without a model request")
+    func authenticationStatus() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-claude-auth-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("claude")
+        try "#!/bin/sh\n[ \"$1 $2\" = \"auth status\" ] || exit 7\nexit 0\n"
+            .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        #expect(await ClaudeCodeSummarizer.authenticationStatus(executablePath: executable.path) == .signedIn)
+
+        try "#!/bin/sh\n[ \"$1 $2\" = \"auth status\" ] || exit 7\nexit 1\n"
+            .write(to: executable, atomically: true, encoding: .utf8)
+        #expect(await ClaudeCodeSummarizer.authenticationStatus(executablePath: executable.path) == .signedOut)
+        #expect(await ClaudeCodeSummarizer.authenticationStatus(executablePath: "/missing/muesli-test-claude") == .unavailable)
     }
 
     @Test("the app and audio CLI route the named provider through Claude Code")
