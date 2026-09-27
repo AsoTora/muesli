@@ -280,6 +280,28 @@ enum MeetingSummaryClient {
             )
             return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
         }
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            generatedNotes = try await ClaudeCodeSummarizer.run(
+                instructions: summaryInstructions(
+                    for: template,
+                    existingNotes: existingNotes,
+                    manualNotes: manualNotesToRetain,
+                    previousMeetingNotes: previousMeetingNotes
+                ),
+                input: summaryUserPrompt(
+                    transcript: transcript,
+                    meetingTitle: meetingTitle,
+                    existingNotes: existingNotes,
+                    manualNotes: manualNotesToRetain,
+                    participantNames: participantNames,
+                    visualContext: visualContext,
+                    previousMeetingNotes: previousMeetingNotes
+                ),
+                model: config.claudeCodeModel,
+                executablePath: config.claudeCodeExecutablePath
+            )
+            return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
+        }
         if backend == MeetingSummaryBackendOption.customLLM.backend {
             generatedNotes = try await summarizeWithCustomLLM(
                 transcript: transcript,
@@ -1241,6 +1263,16 @@ enum MeetingSummaryClient {
 
         if backend == MeetingSummaryBackendOption.lmStudio.backend {
             return await generateTitleWithLMStudio(transcript: excerpt, config: config)
+        }
+
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            return try? await ClaudeCodeSummarizer.run(
+                instructions: titleInstructions,
+                input: excerpt,
+                model: config.claudeCodeModel,
+                executablePath: config.claudeCodeExecutablePath,
+                timeout: 120
+            )
         }
 
         if backend == MeetingSummaryBackendOption.customLLM.backend {

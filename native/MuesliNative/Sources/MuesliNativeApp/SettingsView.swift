@@ -1837,6 +1837,22 @@ struct SettingsView: View {
                     }
                 }
                 keyStatusRow(key: appState.config.openAIAPIKey)
+            } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+                settingsRow("Claude executable", description: "Uses your local Claude Code sign-in. Leave blank to find claude automatically.", controlWidth: meetingControlWidth) {
+                    PastableTextField(
+                        text: appState.config.claudeCodeExecutablePath,
+                        placeholder: "~/.local/bin/claude",
+                        onChange: { val in controller.updateConfig { $0.claudeCodeExecutablePath = val } }
+                    )
+                    .frame(height: 22)
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Model", description: "Leave blank to use your Claude Code default.", controlWidth: meetingControlWidth) {
+                    settingsModelTextField(
+                        currentModel: appState.config.claudeCodeModel,
+                        placeholder: "sonnet, opus, or haiku"
+                    ) { val in controller.updateConfig { $0.claudeCodeModel = val } }
+                }
             } else if appState.selectedMeetingSummaryBackend == .ollama {
                 settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
                     PastableTextField(

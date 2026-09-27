@@ -1663,6 +1663,10 @@ struct OnboardingView: View {
                     summaryBackend = .openAI
                     apiKey = ""
                 }
+                providerTab("Claude Code", selected: summaryBackend == .claudeCode) {
+                    summaryBackend = .claudeCode
+                    apiKey = ""
+                }
                 providerTab("OpenRouter", selected: summaryBackend == .openRouter) {
                     summaryBackend = .openRouter
                     apiKey = ""
@@ -1678,7 +1682,7 @@ struct OnboardingView: View {
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
             )
-            .frame(width: 320)
+            .frame(width: 420)
 
             if summaryBackend == .chatGPT {
                 Text("Use your ChatGPT Plus or Pro subscription.")
@@ -1739,6 +1743,17 @@ struct OnboardingView: View {
                             .lineLimit(2)
                     }
                 }
+            } else if summaryBackend == .claudeCode {
+                Text("Use your installed Claude Code CLI and its existing sign-in. The meeting prompt is sent through your Claude account or configured proxy; Claude does not run on-device.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                Text(ClaudeCodeSummarizer.executableURL() == nil
+                     ? "Install and sign in to Claude Code, then choose its executable in Meeting Summary settings."
+                     : "Claude Code executable found. Make sure you have signed in using the claude command.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .multilineTextAlignment(.center)
             } else if summaryBackend == .ollama {
                 Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
                     .font(MuesliTheme.caption())

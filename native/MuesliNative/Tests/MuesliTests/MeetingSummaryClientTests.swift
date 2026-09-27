@@ -11,6 +11,7 @@ struct MeetingSummaryClientTests {
         let config = AppConfig()
         let selected = provider.summaryConfiguration(from: config, model: "chosen/model")
         let fields = ["chatgpt": "chatgpt_model", "openai": "openai_model",
+                      "claude_code": "claude_code_model",
                       "openrouter": "openrouter_model", "ollama": "ollama_model",
                       "lmstudio": "lmstudio_model", "custom_llm": "custom_llm_model"]
         var original = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])

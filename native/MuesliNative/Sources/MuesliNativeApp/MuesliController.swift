@@ -5623,6 +5623,7 @@ public final class MuesliController: NSObject {
         case .openRouter:
             return appState.isOpenRouterAuthenticated || !config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .ollama: return true
+        case .claudeCode: return ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) != nil
         case .lmStudio: return MeetingSummaryClient.lmStudioHasRequiredSettings(config: config)
         case .customLLM: return MeetingSummaryClient.customLLMHasRequiredSettings(config: config)
         default: return false
