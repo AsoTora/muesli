@@ -1780,19 +1780,13 @@ struct OnboardingView: View {
                                 }
                                 .foregroundStyle(MuesliTheme.textSecondary)
                             } else {
-                                Button("Sign in with Claude Code") { beginClaudeCodeSignIn() }
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(MuesliTheme.accent)
-                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                                ClaudeCodeSignInButton { beginClaudeCodeSignIn() }
                             }
                             Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
                         case .unknown:
                             Text("Muesli could not check Claude Code's sign-in status.")
                                 .foregroundStyle(MuesliTheme.textSecondary)
-                            Button("Sign in with Claude Code") { beginClaudeCodeSignIn() }
+                            ClaudeCodeSignInButton { beginClaudeCodeSignIn() }
                             Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
                         case .unavailable:
                             EmptyView()

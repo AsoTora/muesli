@@ -1854,7 +1854,7 @@ struct SettingsView: View {
                     claudeCodeAccountControl()
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Model", controlWidth: meetingControlWidth) {
+                settingsRow("Model", description: "Uses your Claude Code model preference, or your account's default.", controlWidth: meetingControlWidth) {
                     claudeCodeModelControl()
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
@@ -2468,7 +2468,7 @@ struct SettingsView: View {
     }
 
     private func claudeCodeAccountControl() -> some View {
-        VStack(alignment: .trailing, spacing: 5) {
+        VStack(alignment: .center, spacing: 5) {
             switch claudeCodeAuthStatus {
             case .signedIn:
                 Label("Connected to Claude Code", systemImage: "checkmark.circle.fill")
@@ -2484,14 +2484,7 @@ struct SettingsView: View {
                     }
                     .foregroundStyle(MuesliTheme.textSecondary)
                 } else {
-                    Button("Sign in with Claude Code") { beginClaudeCodeSignIn() }
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(MuesliTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-                        .buttonStyle(.plain)
+                    ClaudeCodeSignInButton(compact: true) { beginClaudeCodeSignIn() }
                 }
                 Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
                     .font(MuesliTheme.caption())
@@ -2511,7 +2504,7 @@ struct SettingsView: View {
             }
         }
         .font(MuesliTheme.caption())
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .center)
         .task(id: appState.config.claudeCodeExecutablePath) {
             await refreshClaudeCodeAuthStatus()
         }
@@ -2533,7 +2526,7 @@ struct SettingsView: View {
     private func claudeCodeModelControl() -> some View {
         let configured = appState.config.claudeCodeModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let presets = SummaryModelPreset.claudeCodeModels
-        let options = [SummaryModelPreset(id: "", label: "Claude Code default")]
+        let options = [SummaryModelPreset(id: "", label: "Follow Claude Code settings")]
             + presets
             + (configured.isEmpty || presets.contains(where: { $0.id == configured })
                 ? [] : [SummaryModelPreset(id: configured, label: "Custom: \(configured)")])
