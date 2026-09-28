@@ -10,6 +10,7 @@ public enum ClaudeCodeAuthenticationStatus: Equatable {
 public enum ClaudeCodeSummaryError: LocalizedError {
     case unavailable
     case inputTooLarge
+    case instructionsTooLarge
     case timedOut
     case failed(String)
     case emptyResponse
@@ -20,6 +21,8 @@ public enum ClaudeCodeSummaryError: LocalizedError {
             return "Claude Code could not be found at the configured executable path."
         case .inputTooLarge:
             return "The meeting prompt exceeds Claude Code's 10 MB stdin limit."
+        case .instructionsTooLarge:
+            return "The meeting instructions exceed Muesli's 100 KB safe process argument limit."
         case .timedOut:
             return "Claude Code took too long to generate meeting notes."
         case .failed(let message):
@@ -33,7 +36,9 @@ public enum ClaudeCodeSummaryError: LocalizedError {
 /// Runs the user's locally installed Claude Code without a shell or access to meeting files.
 public enum ClaudeCodeSummarizer {
     private static let maximumInputBytes = 10_000_000
+    private static let maximumInstructionBytes = 100_000
     private static let maximumOutputBytes = 5_000_000
+    private static let maximumErrorBytes = 1_000_000
 
     public static func executableURL(configuredPath: String = "") -> URL? {
         let path = configuredPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,6 +102,7 @@ public enum ClaudeCodeSummarizer {
             throw ClaudeCodeSummaryError.unavailable
         }
         guard input.utf8.count <= maximumInputBytes else { throw ClaudeCodeSummaryError.inputTooLarge }
+        guard instructions.utf8.count <= maximumInstructionBytes else { throw ClaudeCodeSummaryError.instructionsTooLarge }
         try Task.checkCancellation()
 
         let process = Process()
@@ -114,8 +120,21 @@ public enum ClaudeCodeSummarizer {
             try await task.value
         } onCancel: {
             task.cancel()
-            if process.isRunning { process.terminate() }
+            stopProcess(process)
         }
+    }
+
+    private static func stopProcess(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+    }
+
+    private static func fileSize(at url: URL) -> Int64? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value
     }
 
     private static func runProcess(
@@ -159,24 +178,40 @@ public enum ClaudeCodeSummarizer {
         process.arguments = arguments
         let deadline = Date().addingTimeInterval(timeout)
         let timeoutWork = DispatchWorkItem {
-            if process.isRunning { process.terminate() }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            }
+            stopProcess(process)
         }
         try Task.checkCancellation()
         try process.run()
-        if Task.isCancelled { process.terminate() }
+        if Task.isCancelled { stopProcess(process) }
+        let outputMonitor = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        outputMonitor.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+        outputMonitor.setEventHandler {
+            if (fileSize(at: outputURL) ?? 0) > maximumOutputBytes ||
+                (fileSize(at: errorURL) ?? 0) > maximumErrorBytes {
+                outputMonitor.cancel()
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+        }
+        outputMonitor.resume()
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
         process.waitUntilExit()
+        outputMonitor.cancel()
         timeoutWork.cancel()
         try Task.checkCancellation()
         if Date() >= deadline { throw ClaudeCodeSummaryError.timedOut }
 
+        guard let outputSize = fileSize(at: outputURL), outputSize <= maximumOutputBytes else {
+            throw ClaudeCodeSummaryError.failed("The response was too large.")
+        }
+        guard let errorSize = fileSize(at: errorURL), errorSize <= maximumErrorBytes else {
+            throw ClaudeCodeSummaryError.failed("The CLI diagnostics were too large.")
+        }
         let output = try Data(contentsOf: outputURL)
-        let errorText = (try? String(contentsOf: errorURL, encoding: .utf8)) ?? ""
-        let diagnostic = String(errorText.prefix(1200)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard output.count <= maximumOutputBytes else { throw ClaudeCodeSummaryError.failed("The response was too large.") }
+        let errorReader = try FileHandle(forReadingFrom: errorURL)
+        defer { try? errorReader.close() }
+        let errorData = (try? errorReader.read(upToCount: 4_096)) ?? Data()
+        let diagnostic = String(decoding: errorData, as: UTF8.self)
+            .prefix(1200).trimmingCharacters(in: .whitespacesAndNewlines)
         guard let payload = try? JSONSerialization.jsonObject(with: output) as? [String: Any] else {
             throw ClaudeCodeSummaryError.failed(diagnostic.isEmpty ? "The CLI returned invalid JSON (exit \(process.terminationStatus))." : diagnostic)
         }

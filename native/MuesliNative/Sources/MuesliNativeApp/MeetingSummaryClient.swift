@@ -33,6 +33,15 @@ enum MeetingSummaryRetryPolicy {
             return false
         }
 
+        if let claudeError = error as? ClaudeCodeSummaryError {
+            switch claudeError {
+            case .timedOut, .emptyResponse:
+                return true
+            case .unavailable, .inputTooLarge, .instructionsTooLarge, .failed:
+                return false
+            }
+        }
+
         guard let summaryError = error as? MeetingSummaryError else {
             return false
         }
@@ -57,6 +66,7 @@ enum MeetingSummaryRetryPolicy {
     static func effectiveRetryCount(configuredCount: Int, after error: Error) -> Int {
         let retryCount = clampedRetryCount(configuredCount)
         guard retryCount > 0, shouldRetry(error) else { return 0 }
+        if error is ClaudeCodeSummaryError { return retryCount }
         guard let summaryError = error as? MeetingSummaryError else { return 0 }
 
         switch summaryError {

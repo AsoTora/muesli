@@ -605,6 +605,18 @@ struct MeetingSummaryClientTests {
         #expect(attempts == 3)
     }
 
+    @Test("summary retries transient Claude Code failures without changing their error text")
+    func summaryRetriesClaudeCodeEmptyResponse() async throws {
+        var attempts = 0
+        let result = try await MeetingSummaryClient.withSummaryRetries(maxRetries: 2, sleep: { _ in }) {
+            attempts += 1
+            if attempts == 1 { throw ClaudeCodeSummaryError.emptyResponse }
+            return "Recovered Claude summary"
+        }
+        #expect(result == "Recovered Claude summary")
+        #expect(attempts == 2)
+    }
+
     @Test("summary retries stop after configured retry count")
     func summaryRetriesStopAfterConfiguredRetryCount() async {
         var attempts = 0
@@ -680,6 +692,12 @@ struct MeetingSummaryClientTests {
     @Test("summary retry policy skips cancellation and permanent backend failures")
     func summaryRetryPolicySkipsCancellationAndPermanentBackendFailures() {
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(CancellationError()))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.unavailable))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.inputTooLarge))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.instructionsTooLarge))
+        #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.failed("Not signed in")))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.timedOut))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.emptyResponse))
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(
             MeetingSummaryError.requestFailed(backend: "OpenAI", underlying: URLError(.cancelled))
         ))
@@ -714,6 +732,10 @@ struct MeetingSummaryClientTests {
 
     @Test("summary retry policy uses backend-aware retry budgets")
     func summaryRetryPolicyUsesBackendAwareRetryBudgets() {
+        #expect(MeetingSummaryRetryPolicy.effectiveRetryCount(
+            configuredCount: 2,
+            after: ClaudeCodeSummaryError.emptyResponse
+        ) == 2)
         #expect(MeetingSummaryRetryPolicy.effectiveRetryCount(
             configuredCount: 5,
             after: MeetingSummaryError.backendFailed(backend: "OpenAI", statusCode: 503, message: "Unavailable")
