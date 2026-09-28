@@ -22,6 +22,8 @@ struct OnboardingView: View {
     @State private var openRouterSignInError: String?
     @State private var isEnteringOpenRouterAPIKey = false
     @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
+    @State private var claudeCodeSignInError: String?
+    @State private var isWaitingForClaudeCodeSignIn = false
 
     // Permission states — polled from OS every second
     @State private var micGranted = false
@@ -1771,13 +1773,26 @@ struct OnboardingView: View {
                             Label("Claude Code is signed in and ready", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(MuesliTheme.success)
                         case .signedOut:
-                            Text("Sign in through Claude Code in Terminal, then check again.")
+                            if isWaitingForClaudeCodeSignIn {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Finish sign-in in Terminal or your browser")
+                                }
                                 .foregroundStyle(MuesliTheme.textSecondary)
-                            Button("Copy sign-in command") { copyClaudeCodeSignInCommand() }
+                            } else {
+                                Button("Sign in with Claude Code") { beginClaudeCodeSignIn() }
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(MuesliTheme.accent)
+                                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                            }
                             Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
                         case .unknown:
                             Text("Muesli could not check Claude Code's sign-in status.")
                                 .foregroundStyle(MuesliTheme.textSecondary)
+                            Button("Sign in with Claude Code") { beginClaudeCodeSignIn() }
                             Button("Check again") { Task { await refreshClaudeCodeAuthStatus() } }
                         case .unavailable:
                             EmptyView()
@@ -1785,10 +1800,28 @@ struct OnboardingView: View {
                     } else {
                         ProgressView("Checking Claude Code sign-in…")
                     }
+                    if let claudeCodeSignInError {
+                        Text(claudeCodeSignInError)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
                 }
                 .font(MuesliTheme.caption())
                 .buttonStyle(.plain)
                 .task { await refreshClaudeCodeAuthStatus() }
+                .task(id: isWaitingForClaudeCodeSignIn) {
+                    guard isWaitingForClaudeCodeSignIn else { return }
+                    for _ in 0..<90 {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        await refreshClaudeCodeAuthStatus()
+                        if claudeCodeAuthStatus == .signedIn || claudeCodeAuthStatus == .unavailable {
+                            isWaitingForClaudeCodeSignIn = false
+                            return
+                        }
+                    }
+                    isWaitingForClaudeCodeSignIn = false
+                }
             } else if summaryBackend == .ollama {
                 Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
                     .font(MuesliTheme.caption())
@@ -1930,7 +1963,6 @@ struct OnboardingView: View {
 
     @MainActor
     private func refreshClaudeCodeAuthStatus() async {
-        claudeCodeAuthStatus = nil
         let status = await ClaudeCodeSummarizer.authenticationStatus(
             executablePath: appState.config.claudeCodeExecutablePath
         )
@@ -1941,13 +1973,15 @@ struct OnboardingView: View {
         }
     }
 
-    private func copyClaudeCodeSignInCommand() {
-        guard let executable = ClaudeCodeSummarizer.executableURL(
-            configuredPath: appState.config.claudeCodeExecutablePath
-        ) else { return }
-        let quotedPath = "'" + executable.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("\(quotedPath) auth login", forType: .string)
+    @MainActor
+    private func beginClaudeCodeSignIn() {
+        claudeCodeSignInError = nil
+        do {
+            try ClaudeCodeSignInLauncher.start(executablePath: appState.config.claudeCodeExecutablePath)
+            isWaitingForClaudeCodeSignIn = true
+        } catch {
+            claudeCodeSignInError = error.localizedDescription
+        }
     }
 
     // MARK: - Actions

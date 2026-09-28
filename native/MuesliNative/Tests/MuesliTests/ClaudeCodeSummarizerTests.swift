@@ -6,6 +6,20 @@ import MuesliCore
 
 @Suite("Claude Code summarizer")
 struct ClaudeCodeSummarizerTests {
+    @Test("Claude Code sign-in quotes unusual executable paths for Terminal")
+    func signInCommandQuoting() throws {
+        let path = "/tmp/Claude Code's `test` $HOME; echo unsafe"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "printf '%s' \(ClaudeCodeSignInLauncher.shellQuoted(path))"]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        #expect(String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) == path)
+    }
+
     @Test("runs a configured executable with the prompt on stdin and parses its JSON result")
     func configuredExecutable() async throws {
         let directory = FileManager.default.temporaryDirectory
