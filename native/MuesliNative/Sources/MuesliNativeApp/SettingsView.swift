@@ -589,11 +589,6 @@ struct SettingsView: View {
             } message: {
                 Text("Clear this Mac's sync connection and set it up again. Local history, audio, and CloudKit data won't be deleted.")
             }
-            .alert("Couldn't Use Claude Code", isPresented: $isShowingInvalidClaudeCodeExecutableAlert) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("The selected file isn't executable. Choose the installed Claude Code CLI.")
-            }
             .sheet(isPresented: $isShowingIPhoneBridgeQRCode, onDismiss: {
                 controller.cancelIPhoneBridgeDeviceDiscovery()
             }) {
@@ -1800,6 +1795,11 @@ struct SettingsView: View {
                         Button("Locate existing Claude Code…") { pickExistingClaudeCodeExecutable() }
                             .font(MuesliTheme.caption())
                             .buttonStyle(.link)
+                            .alert("Couldn't Use Claude Code", isPresented: $isShowingInvalidClaudeCodeExecutableAlert) {
+                                Button("OK", role: .cancel) {}
+                            } message: {
+                                Text("The selected file isn't executable. Choose the installed Claude Code CLI.")
+                            }
                     }
                 }
             }
