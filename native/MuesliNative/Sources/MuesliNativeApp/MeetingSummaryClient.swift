@@ -35,9 +35,9 @@ enum MeetingSummaryRetryPolicy {
 
         if let claudeError = error as? ClaudeCodeSummaryError {
             switch claudeError {
-            case .timedOut, .emptyResponse:
+            case .emptyResponse:
                 return true
-            case .unavailable, .inputTooLarge, .instructionsTooLarge, .failed:
+            case .timedOut, .unavailable, .inputTooLarge, .instructionsTooLarge, .failed:
                 return false
             }
         }
