@@ -590,7 +590,7 @@ struct MeetingSummaryClientTests {
         let result = try await MeetingSummaryClient.withSummaryRetries(
             maxRetries: 3,
             sleep: { _ in }
-        ) {
+        ) { _ in
             attempts += 1
             if attempts < 3 {
                 throw MeetingSummaryError.requestFailed(
@@ -608,7 +608,7 @@ struct MeetingSummaryClientTests {
     @Test("summary retries transient Claude Code failures without changing their error text")
     func summaryRetriesClaudeCodeEmptyResponse() async throws {
         var attempts = 0
-        let result = try await MeetingSummaryClient.withSummaryRetries(maxRetries: 2, sleep: { _ in }) {
+        let result = try await MeetingSummaryClient.withSummaryRetries(maxRetries: 2, sleep: { _ in }) { _ in
             attempts += 1
             if attempts == 1 { throw ClaudeCodeSummaryError.emptyResponse }
             return "Recovered Claude summary"
@@ -617,20 +617,57 @@ struct MeetingSummaryClientTests {
         #expect(attempts == 2)
     }
 
-    @Test("summary does not retry Claude Code's five-minute timeout")
-    func summaryDoesNotRetryClaudeCodeTimeout() async {
+    @Test("Claude Code timeout retries use the remaining summary time budget")
+    func summaryRetriesClaudeCodeTimeoutWithinBudget() async {
         var attempts = 0
+        var currentTime = Date(timeIntervalSince1970: 0)
+        var retryTimeout: TimeInterval?
         do {
-            _ = try await MeetingSummaryClient.withSummaryRetries(maxRetries: 5, sleep: { _ in }) {
+            _ = try await MeetingSummaryClient.withSummaryRetries(
+                maxRetries: 5,
+                timeBudget: 420,
+                now: { currentTime },
+                sleep: { currentTime.addTimeInterval($0) }
+            ) { remainingTime in
                 attempts += 1
+                if attempts == 1 {
+                    #expect(remainingTime == 420)
+                    currentTime.addTimeInterval(300)
+                } else {
+                    retryTimeout = remainingTime
+                    currentTime.addTimeInterval(remainingTime ?? 0)
+                }
                 throw ClaudeCodeSummaryError.timedOut
             }
             #expect(Bool(false), "Expected the timeout to propagate")
         } catch ClaudeCodeSummaryError.timedOut {
-            #expect(attempts == 1)
+            #expect(attempts == 2)
+            #expect(retryTimeout == 119)
         } catch {
             #expect(Bool(false), "Expected Claude Code timeout, got \(error)")
         }
+    }
+
+    @Test("Claude Code can recover on a timeout retry")
+    func summaryRecoversAfterClaudeCodeTimeout() async throws {
+        var attempts = 0
+        var currentTime = Date(timeIntervalSince1970: 0)
+        let result = try await MeetingSummaryClient.withSummaryRetries(
+            maxRetries: 2,
+            timeBudget: 420,
+            now: { currentTime },
+            sleep: { currentTime.addTimeInterval($0) }
+        ) { remainingTime in
+            attempts += 1
+            if attempts == 1 {
+                currentTime.addTimeInterval(300)
+                throw ClaudeCodeSummaryError.timedOut
+            }
+            #expect(remainingTime == 119)
+            return "Recovered Claude summary"
+        }
+        #expect(result == "Recovered Claude summary")
+        #expect(attempts == 2)
     }
 
     @Test("summary retries stop after configured retry count")
@@ -641,7 +678,7 @@ struct MeetingSummaryClientTests {
             _ = try await MeetingSummaryClient.withSummaryRetries(
                 maxRetries: 2,
                 sleep: { _ in }
-            ) {
+            ) { _ in
                 attempts += 1
                 throw MeetingSummaryError.emptyResponse(backend: "OpenRouter")
             }
@@ -664,7 +701,7 @@ struct MeetingSummaryClientTests {
             _ = try await MeetingSummaryClient.withSummaryRetries(
                 maxRetries: 5,
                 sleep: { _ in }
-            ) {
+            ) { _ in
                 attempts += 1
                 throw MeetingSummaryError.emptyResponse(backend: "Ollama")
             }
@@ -687,7 +724,7 @@ struct MeetingSummaryClientTests {
             _ = try await MeetingSummaryClient.withSummaryRetries(
                 maxRetries: 5,
                 sleep: { _ in }
-            ) {
+            ) { _ in
                 attempts += 1
                 throw MeetingSummaryError.requestFailed(
                     backend: "LM Studio",
@@ -712,7 +749,7 @@ struct MeetingSummaryClientTests {
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.inputTooLarge))
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.instructionsTooLarge))
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.failed("Not signed in")))
-        #expect(!MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.timedOut))
+        #expect(MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.timedOut))
         #expect(MeetingSummaryRetryPolicy.shouldRetry(ClaudeCodeSummaryError.emptyResponse))
         #expect(!MeetingSummaryRetryPolicy.shouldRetry(
             MeetingSummaryError.requestFailed(backend: "OpenAI", underlying: URLError(.cancelled))
@@ -751,7 +788,7 @@ struct MeetingSummaryClientTests {
         #expect(MeetingSummaryRetryPolicy.effectiveRetryCount(
             configuredCount: 5,
             after: ClaudeCodeSummaryError.timedOut
-        ) == 0)
+        ) == 5)
         #expect(MeetingSummaryRetryPolicy.effectiveRetryCount(
             configuredCount: 2,
             after: ClaudeCodeSummaryError.emptyResponse
