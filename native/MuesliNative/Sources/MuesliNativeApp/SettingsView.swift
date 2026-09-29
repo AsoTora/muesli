@@ -189,7 +189,7 @@ struct SettingsView: View {
     @State private var isSigningInOpenRouter = false
     @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
     @State private var claudeCodeSignInError: String?
-    @State private var claudeCodeExecutableSelectionError: String?
+    @State private var isShowingInvalidClaudeCodeExecutableAlert = false
     @State private var isWaitingForClaudeCodeSignIn = false
     @State private var isShowingClaudeCodeAdvanced = false
     @State private var isEnteringOpenRouterAPIKey = false
@@ -589,16 +589,10 @@ struct SettingsView: View {
             } message: {
                 Text("Clear this Mac's sync connection and set it up again. Local history, audio, and CloudKit data won't be deleted.")
             }
-            .alert(
-                "Couldn't Use Claude Code",
-                isPresented: Binding(
-                    get: { claudeCodeExecutableSelectionError != nil },
-                    set: { if !$0 { claudeCodeExecutableSelectionError = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) { claudeCodeExecutableSelectionError = nil }
+            .alert("Couldn't Use Claude Code", isPresented: $isShowingInvalidClaudeCodeExecutableAlert) {
+                Button("OK", role: .cancel) {}
             } message: {
-                Text(claudeCodeExecutableSelectionError ?? "Choose an executable file.")
+                Text("The selected file isn't executable. Choose the installed Claude Code CLI.")
             }
             .sheet(isPresented: $isShowingIPhoneBridgeQRCode, onDismiss: {
                 controller.cancelIPhoneBridgeDeviceDiscovery()
@@ -2916,10 +2910,9 @@ struct SettingsView: View {
         presentOpenPanel(panel) { url in
             let path = url.standardizedFileURL.path
             guard ClaudeCodeSummarizer.executableURL(configuredPath: path) != nil else {
-                claudeCodeExecutableSelectionError = "The selected file isn't executable. Choose the installed Claude Code CLI."
+                isShowingInvalidClaudeCodeExecutableAlert = true
                 return
             }
-            claudeCodeExecutableSelectionError = nil
             controller.updateConfig {
                 $0.claudeCodeExecutablePath = path
                 $0.meetingSummaryBackend = MeetingSummaryBackendOption.claudeCode.backend
