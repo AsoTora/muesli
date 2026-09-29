@@ -189,6 +189,7 @@ struct SettingsView: View {
     @State private var isSigningInOpenRouter = false
     @State private var claudeCodeAuthStatus: ClaudeCodeAuthenticationStatus?
     @State private var claudeCodeSignInError: String?
+    @State private var claudeCodeExecutableSelectionError: String?
     @State private var isWaitingForClaudeCodeSignIn = false
     @State private var isShowingClaudeCodeAdvanced = false
     @State private var isEnteringOpenRouterAPIKey = false
@@ -587,6 +588,17 @@ struct SettingsView: View {
                 }
             } message: {
                 Text("Clear this Mac's sync connection and set it up again. Local history, audio, and CloudKit data won't be deleted.")
+            }
+            .alert(
+                "Couldn't Use Claude Code",
+                isPresented: Binding(
+                    get: { claudeCodeExecutableSelectionError != nil },
+                    set: { if !$0 { claudeCodeExecutableSelectionError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { claudeCodeExecutableSelectionError = nil }
+            } message: {
+                Text(claudeCodeExecutableSelectionError ?? "Choose an executable file.")
             }
             .sheet(isPresented: $isShowingIPhoneBridgeQRCode, onDismiss: {
                 controller.cancelIPhoneBridgeDeviceDiscovery()
@@ -1777,15 +1789,23 @@ struct SettingsView: View {
                 description: "Remote summaries may send transcripts, notes, screen context, and participant names.",
                 controlWidth: meetingControlWidth
             ) {
-                settingsMenu(
-                    selection: appState.selectedMeetingSummaryBackend.label,
-                    options: MeetingSummaryBackendOption.selectable(
-                        config: appState.config,
-                        selected: appState.selectedMeetingSummaryBackend
-                    ).map(\.label)
-                ) { label in
-                    if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
-                        controller.selectMeetingSummaryBackend(option)
+                VStack(alignment: .trailing, spacing: 4) {
+                    settingsMenu(
+                        selection: appState.selectedMeetingSummaryBackend.label,
+                        options: MeetingSummaryBackendOption.selectable(
+                            config: appState.config,
+                            selected: appState.selectedMeetingSummaryBackend
+                        ).map(\.label)
+                    ) { label in
+                        if let option = MeetingSummaryBackendOption.all.first(where: { $0.label == label }) {
+                            controller.selectMeetingSummaryBackend(option)
+                        }
+                    }
+                    if ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) == nil,
+                       appState.selectedMeetingSummaryBackend != .claudeCode {
+                        Button("Locate existing Claude Code…") { pickExistingClaudeCodeExecutable() }
+                            .font(MuesliTheme.caption())
+                            .buttonStyle(.link)
                     }
                 }
             }
@@ -2880,6 +2900,30 @@ struct SettingsView: View {
 
         presentOpenPanel(panel) { url in
             controller.updateConfig { $0.meetingHookPath = url.standardizedFileURL.path }
+        }
+    }
+
+    private func pickExistingClaudeCodeExecutable() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose your existing Claude Code executable"
+        panel.prompt = "Use Claude Code"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+
+        presentOpenPanel(panel) { url in
+            let path = url.standardizedFileURL.path
+            guard ClaudeCodeSummarizer.executableURL(configuredPath: path) != nil else {
+                claudeCodeExecutableSelectionError = "The selected file isn't executable. Choose the installed Claude Code CLI."
+                return
+            }
+            claudeCodeExecutableSelectionError = nil
+            controller.updateConfig {
+                $0.claudeCodeExecutablePath = path
+                $0.meetingSummaryBackend = MeetingSummaryBackendOption.claudeCode.backend
+            }
         }
     }
 
