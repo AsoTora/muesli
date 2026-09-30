@@ -33,6 +33,15 @@ enum MeetingSummaryRetryPolicy {
             return false
         }
 
+        if let claudeError = error as? ClaudeCodeSummaryError {
+            switch claudeError {
+            case .timedOut, .emptyResponse:
+                return true
+            case .unavailable, .inputTooLarge, .instructionsTooLarge, .failed:
+                return false
+            }
+        }
+
         guard let summaryError = error as? MeetingSummaryError else {
             return false
         }
@@ -57,6 +66,7 @@ enum MeetingSummaryRetryPolicy {
     static func effectiveRetryCount(configuredCount: Int, after error: Error) -> Int {
         let retryCount = clampedRetryCount(configuredCount)
         guard retryCount > 0, shouldRetry(error) else { return 0 }
+        if error is ClaudeCodeSummaryError { return retryCount }
         guard let summaryError = error as? MeetingSummaryError else { return 0 }
 
         switch summaryError {
@@ -138,6 +148,8 @@ enum MeetingSummaryClient {
     private static let lmStudioTitleTimeout: TimeInterval = 120
     private static let customLLMSummaryTimeout: TimeInterval = 300
     private static let customLLMTitleTimeout: TimeInterval = 120
+    private static let claudeCodeSummaryTimeout: TimeInterval = 300
+    private static let claudeCodeSummaryTimeBudget: TimeInterval = 420
 
     private static let titleInstructions = """
     Generate a short, descriptive meeting title (3-7 words) from these transcript excerpts and any written notes. \
@@ -166,7 +178,11 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String? = nil,
         openRouterAPIKeyOverride: String? = nil
     ) async throws -> String {
-        try await withSummaryRetries(maxRetries: config.meetingSummaryRetryCount) {
+        let isClaudeCode = config.meetingSummaryBackend.lowercased() == MeetingSummaryBackendOption.claudeCode.backend
+        return try await withSummaryRetries(
+            maxRetries: config.meetingSummaryRetryCount,
+            timeBudget: isClaudeCode ? claudeCodeSummaryTimeBudget : nil
+        ) { remainingTime in
             try await summarizeOnce(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
@@ -177,34 +193,42 @@ enum MeetingSummaryClient {
                 participantNames: participantNames,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes,
-                openRouterAPIKeyOverride: openRouterAPIKeyOverride
+                openRouterAPIKeyOverride: openRouterAPIKeyOverride,
+                remainingSummaryTime: remainingTime
             )
         }
     }
 
     static func withSummaryRetries(
         maxRetries: Int,
+        timeBudget: TimeInterval? = nil,
+        now: () -> Date = Date.init,
         sleep: (TimeInterval) async throws -> Void = { delay in
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         },
-        operation: () async throws -> String
+        operation: (TimeInterval?) async throws -> String
     ) async throws -> String {
         let retryCount = MeetingSummaryRetryPolicy.clampedRetryCount(maxRetries)
+        let deadline = timeBudget.map { now().addingTimeInterval($0) }
         var attempt = 0
         while true {
             do {
-                return try await operation()
+                let remainingTime = deadline.map { max(0, $0.timeIntervalSince(now())) }
+                return try await operation(remainingTime)
             } catch {
                 let effectiveRetryCount = MeetingSummaryRetryPolicy.effectiveRetryCount(
                     configuredCount: retryCount,
                     after: error
                 )
-                guard attempt < effectiveRetryCount else {
+                let delay = MeetingSummaryRetryPolicy.retryDelay(forAttempt: attempt + 1)
+                guard attempt < effectiveRetryCount,
+                      deadline.map({ $0.timeIntervalSince(now()) > delay }) ?? true else {
                     throw error
                 }
                 attempt += 1
                 fputs("[summary] retrying summary generation after failure (\(attempt)/\(effectiveRetryCount)): \(error.localizedDescription)\n", stderr)
-                try await sleep(MeetingSummaryRetryPolicy.retryDelay(forAttempt: attempt))
+                try await sleep(delay)
+                if let deadline, deadline <= now() { throw error }
             }
         }
     }
@@ -219,7 +243,8 @@ enum MeetingSummaryClient {
         participantNames: [String],
         visualContext: String?,
         previousMeetingNotes: String?,
-        openRouterAPIKeyOverride: String?
+        openRouterAPIKeyOverride: String?,
+        remainingSummaryTime: TimeInterval?
     ) async throws -> String {
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
         let generatedNotes: String
@@ -277,6 +302,29 @@ enum MeetingSummaryClient {
                 template: template,
                 visualContext: visualContext,
                 previousMeetingNotes: previousMeetingNotes
+            )
+            return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
+        }
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            generatedNotes = try await ClaudeCodeSummarizer.run(
+                instructions: summaryInstructions(
+                    for: template,
+                    existingNotes: existingNotes,
+                    manualNotes: manualNotesToRetain,
+                    previousMeetingNotes: previousMeetingNotes
+                ),
+                input: summaryUserPrompt(
+                    transcript: transcript,
+                    meetingTitle: meetingTitle,
+                    existingNotes: existingNotes,
+                    manualNotes: manualNotesToRetain,
+                    participantNames: participantNames,
+                    visualContext: visualContext,
+                    previousMeetingNotes: previousMeetingNotes
+                ),
+                model: config.claudeCodeModel,
+                executablePath: config.claudeCodeExecutablePath,
+                timeout: min(claudeCodeSummaryTimeout, remainingSummaryTime ?? claudeCodeSummaryTimeout)
             )
             return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
         }
@@ -1241,6 +1289,16 @@ enum MeetingSummaryClient {
 
         if backend == MeetingSummaryBackendOption.lmStudio.backend {
             return await generateTitleWithLMStudio(transcript: excerpt, config: config)
+        }
+
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            return try? await ClaudeCodeSummarizer.run(
+                instructions: titleInstructions,
+                input: excerpt,
+                model: config.claudeCodeModel,
+                executablePath: config.claudeCodeExecutablePath,
+                timeout: 120
+            )
         }
 
         if backend == MeetingSummaryBackendOption.customLLM.backend {

@@ -139,6 +139,7 @@ case "${shard}" in
       MeetingFollowUpThreadTests
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
+      ClaudeCodeSummarizerTests
       MeetingsNavigationTests
       MeetingBrowserLogicTests
       MeetingNotesInlineMarkdownTests

@@ -1645,6 +1645,8 @@ struct MeetingDetailView: View {
             return !config.openAIAPIKey.isEmpty || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
         } else if appState.selectedMeetingSummaryBackend == .ollama {
             return true
+        } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+            return ClaudeCodeSummarizer.executableURL(configuredPath: config.claudeCodeExecutablePath) != nil
         } else if appState.selectedMeetingSummaryBackend == .lmStudio {
             return MeetingSummaryClient.lmStudioHasRequiredSettings(config: config)
         } else if appState.selectedMeetingSummaryBackend == .customLLM {
