@@ -1015,7 +1015,7 @@ struct AppConfigTests {
         #expect(config.openRouterAPIKey.isEmpty)
         #expect(config.meetingSummaryRetryCount == MeetingSummaryRetryPolicy.defaultRetryCount)
         #expect(config.ollamaURL == "http://localhost:11434")
-        #expect(config.ollamaModel == "qwen3.5")
+        #expect(config.ollamaModel == "gemma3:4b")
         #expect(config.lmStudioURL == "http://localhost:1234")
         #expect(config.lmStudioModel.isEmpty)
         #expect(config.customLLMURL.isEmpty)

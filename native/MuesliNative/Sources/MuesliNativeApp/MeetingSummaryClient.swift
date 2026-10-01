@@ -137,7 +137,7 @@ enum MeetingSummaryClient {
     private static let defaultOpenAIModel = "gpt-5.4-mini"
     private static let defaultOpenRouterModel = "openrouter/free"
     private static let defaultChatGPTModel = "gpt-5.4-mini"
-    private static let defaultOllamaModel = "qwen3.5"
+    private static let defaultOllamaModel = LocalOllamaService.defaultModel
     private static let defaultSummaryMaxOutputTokens = 2500
     private static let participantPromptNameCharacterLimit = 200
     private static let participantPromptCharacterLimit = 4_000
@@ -775,6 +775,7 @@ enum MeetingSummaryClient {
 
         let configuredModel = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
+        try await LocalOllamaService.shared.prepareForSummary(at: baseURL, model: model)
         let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
@@ -1571,6 +1572,7 @@ enum MeetingSummaryClient {
         let chatURL = baseURL.appendingPathComponent("api/chat")
         let configuredModel = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
+        guard (try? await LocalOllamaService.shared.prepareForSummary(at: baseURL, model: model)) != nil else { return nil }
 
         var body: [String: Any] = [
             "model": model,

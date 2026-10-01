@@ -1789,7 +1789,7 @@ struct AppConfig: Codable {
     var meetingSummaryReasoningEffort: ReasoningEffort?
     var meetingSummaryRetryCount: Int = MeetingSummaryRetryPolicy.defaultRetryCount
     var ollamaURL: String = "http://localhost:11434"
-    var ollamaModel: String = "qwen3.5"
+    var ollamaModel: String = LocalOllamaService.defaultModel
     var lmStudioURL: String = "http://localhost:1234"
     var lmStudioModel: String = ""
     var customLLMURL: String = ""

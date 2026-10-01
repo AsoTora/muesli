@@ -1093,7 +1093,7 @@ struct CLISummaryConfig: Decodable {
     var openAIModel = ""
     var openRouterModel = ""
     var ollamaURL = "http://localhost:11434"
-    var ollamaModel = "qwen3.5"
+    var ollamaModel = LocalOllamaService.defaultModel
     var lmStudioURL = "http://localhost:1234"
     var lmStudioModel = ""
     var customLLMURL = ""
@@ -1229,7 +1229,7 @@ enum CLISummaryClient {
             guard let baseURL else { throw CLISummaryError.unavailable("Invalid Ollama URL.") }
             return try await ollamaSummary(
                 url: baseURL.appendingPathComponent("api/chat"),
-                model: config.ollamaModel.isEmpty ? "qwen3.5" : config.ollamaModel,
+                model: config.ollamaModel.isEmpty ? LocalOllamaService.defaultModel : config.ollamaModel,
                 transcript: transcript,
                 title: title
             )
@@ -1339,6 +1339,7 @@ enum CLISummaryClient {
     }
 
     private static func ollamaSummary(url: URL, model: String, transcript: String, title: String) async throws -> String {
+        try await LocalOllamaService.shared.prepareForSummary(at: url.deletingLastPathComponent().deletingLastPathComponent(), model: model)
         var body: [String: Any] = [
             "model": model,
             "messages": [

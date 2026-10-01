@@ -192,6 +192,7 @@ struct SettingsView: View {
     @State private var isShowingInvalidClaudeCodeExecutableAlert = false
     @State private var isWaitingForClaudeCodeSignIn = false
     @State private var isShowingClaudeCodeAdvanced = false
+    @State private var isShowingOllamaAdvanced = false
     @State private var isEnteringOpenRouterAPIKey = false
     @State private var manualOpenRouterAPIKey = ""
     @State private var pendingDataDestruction: PendingDataDestruction?
@@ -1896,26 +1897,35 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             } else if appState.selectedMeetingSummaryBackend == .ollama {
-                settingsRow("Ollama URL", controlWidth: meetingControlWidth) {
-                    PastableTextField(
-                        text: appState.config.ollamaURL,
-                        placeholder: "http://localhost:11434",
-                        onChange: { val in controller.updateConfig { $0.ollamaURL = val } }
-                    )
-                    .frame(height: 22)
+                settingsRow("Model", description: "Choose a model for notes on this Mac.", controlWidth: meetingControlWidth) {
+                    settingsModelMenu(
+                        currentModel: appState.config.ollamaModel,
+                        presets: SummaryModelPreset.ollamaModels
+                    ) { val in controller.updateConfig { $0.ollamaModel = val } }
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Model", description: "Download the selected model in Ollama first. You can also enter another installed model ID.", controlWidth: meetingControlWidth) {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        settingsModelMenu(
-                            currentModel: appState.config.ollamaModel,
-                            presets: SummaryModelPreset.ollamaModels
-                        ) { val in controller.updateConfig { $0.ollamaModel = val } }
-                        settingsModelTextField(
-                            currentModel: appState.config.ollamaModel,
-                            placeholder: "qwen3.5"
-                        ) { val in controller.updateConfig { $0.ollamaModel = val } }
-                    }
+                LocalSummarySetupView(address: appState.config.ollamaURL, model: appState.config.ollamaModel)
+                Divider().background(MuesliTheme.surfaceBorder)
+                DisclosureGroup(isExpanded: $isShowingOllamaAdvanced) {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                        settingsRow("Server address", controlWidth: meetingControlWidth) {
+                            PastableTextField(
+                                text: appState.config.ollamaURL,
+                                placeholder: "http://localhost:11434",
+                                onChange: { val in controller.updateConfig { $0.ollamaURL = val } }
+                            ).frame(height: 22)
+                        }
+                        settingsRow("Custom model ID", controlWidth: meetingControlWidth) {
+                            settingsModelTextField(
+                                currentModel: appState.config.ollamaModel,
+                                placeholder: "gemma3:4b"
+                            ) { val in controller.updateConfig { $0.ollamaModel = val } }
+                        }
+                    }.padding(.top, MuesliTheme.spacing12)
+                } label: {
+                    Text("Advanced")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.textSecondary)
                 }
             } else if appState.selectedMeetingSummaryBackend == .lmStudio {
                 settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {

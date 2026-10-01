@@ -1817,25 +1817,19 @@ struct OnboardingView: View {
                     isWaitingForClaudeCodeSignIn = false
                 }
             } else if summaryBackend == .ollama {
-                Text("Run AI models locally on your device with Ollama.\nNo API key needed — just install Ollama and pull a model.")
+                Text("Create meeting notes on this Mac. Set up a model once, then Muesli handles starting Ollama for you.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .multilineTextAlignment(.center)
-
-                VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                    Text("Ollama is served by default at http://localhost:11434")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(MuesliTheme.success)
-                            .frame(width: 6, height: 6)
-                        Text("No authentication required")
-                            .font(.system(size: 11))
-                            .foregroundStyle(MuesliTheme.success)
+                Picker("Local model", selection: Binding(
+                    get: { appState.config.ollamaModel },
+                    set: { value in controller.updateConfig { $0.ollamaModel = value } }
+                )) {
+                    ForEach(SummaryModelPreset.ollamaModels, id: \.id) { preset in
+                        Text(preset.label).tag(preset.id)
                     }
                 }
+                LocalSummarySetupView(address: appState.config.ollamaURL, model: appState.config.ollamaModel)
             } else if summaryBackend == .openRouter {
                 Text("Connect OpenRouter in your browser. Muesli receives a dedicated API key after you approve access.")
                     .font(MuesliTheme.caption())
