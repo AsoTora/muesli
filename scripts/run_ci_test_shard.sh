@@ -141,6 +141,7 @@ case "${shard}" in
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
       LocalOllamaServiceTests
+      OllamaMeetingRequestTests
       ClaudeCodeSummarizerTests
       MeetingsNavigationTests
       MeetingBrowserLogicTests

@@ -155,6 +155,8 @@ enum MeetingSummaryClient {
     Generate a short, descriptive meeting title (3-7 words) from these transcript excerpts and any written notes. \
     Treat written notes as high-priority context: they may contain the clearest statement of the meeting's topic or outcome. \
     Prefer the main topic and outcome across the whole meeting over opening small talk or setup. \
+    Use the dominant language of the transcript unless written notes explicitly request another language. \
+    Identify the actual kind of conversation; do not mistake financial or work examples for its main purpose. \
     Return ONLY the title text, nothing else. No quotes, no prefix, no explanation. \
     Examples: "Q3 Sprint Planning", "Customer Onboarding Review", "Security Audit Discussion"
     """
@@ -309,6 +311,7 @@ enum MeetingSummaryClient {
             generatedNotes = try await ClaudeCodeSummarizer.run(
                 instructions: summaryInstructions(
                     for: template,
+                    transcript: transcript,
                     existingNotes: existingNotes,
                     manualNotes: manualNotesToRetain,
                     previousMeetingNotes: previousMeetingNotes
@@ -371,7 +374,7 @@ enum MeetingSummaryClient {
         return sections.joined(separator: "\n\n")
     }
 
-    static func summaryInstructions(for template: MeetingTemplateSnapshot, existingNotes: String? = nil, manualNotes: String? = nil, previousMeetingNotes: String? = nil) -> String {
+    static func summaryInstructions(for template: MeetingTemplateSnapshot, transcript: String = "", existingNotes: String? = nil, manualNotes: String? = nil, previousMeetingNotes: String? = nil) -> String {
         let notePreservationInstructions: String
         let hasManualNotes = !(manualNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         if let existingNotes,
@@ -388,12 +391,14 @@ enum MeetingSummaryClient {
             ? "\n\nThis meeting is a follow-up to an earlier meeting whose notes are provided as read-only context. Use them to resolve references to earlier decisions, and carry forward action items from the previous meeting that are still open after this meeting's discussion, marking them as carried over. Do not otherwise restate the previous meeting's content."
             : ""
 
-        return baseSummaryInstructions
+        return MeetingSummaryGrounding.languageInstructions(for: transcript)
+            + baseSummaryInstructions
             + notePreservationInstructions
             + manualNoteInstructions
             + followUpInstructions
             + "\n\nFollow this note template exactly:\n\n"
             + template.prompt
+            + MeetingSummaryGrounding.instructions
     }
 
     static func summaryUserPrompt(
@@ -594,7 +599,7 @@ enum MeetingSummaryClient {
             return rawTranscriptFallback(transcript: transcript, meetingTitle: meetingTitle)
         }
 
-        let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -667,7 +672,7 @@ enum MeetingSummaryClient {
 
         let configuredModel = config.openRouterModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOpenRouterModel : configuredModel
-        let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -724,7 +729,7 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String? = nil
     ) async throws -> String {
         do {
-            let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+            let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
             let text = try await ChatGPTResponsesClient.respond(
                 systemPrompt: instructions,
                 userPrompt: summaryUserPrompt(
@@ -776,7 +781,7 @@ enum MeetingSummaryClient {
         let configuredModel = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
         try await LocalOllamaService.shared.prepareForSummary(at: baseURL, model: model)
-        let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -786,20 +791,10 @@ enum MeetingSummaryClient {
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes
         )
-        var body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": instructions],
-                ["role": "user", "content": userPrompt],
-            ],
-            "stream": false,
-            "options": ["num_predict": defaultSummaryMaxOutputTokens],
-        ]
-        // Qwen can spend the entire token budget on reasoning and return no notes.
-        // Keep other model families' thinking defaults unchanged.
-        if model.lowercased().hasPrefix("qwen3") {
-            body["think"] = false
-        }
+        let body = OllamaMeetingRequest.body(
+            model: model, instructions: instructions, prompt: userPrompt,
+            outputTokens: OllamaMeetingRequest.summaryOutputTokens
+        )
 
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = ollamaSummaryTimeout
@@ -810,18 +805,11 @@ enum MeetingSummaryClient {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             try validateHTTPResponse(response, data: data, backend: "Ollama")
-            guard
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let message = json["message"] as? [String: Any],
-                let text = message["content"] as? String,
-                !text.isEmpty
-            else {
-                if let message = extractErrorMessage(from: data) {
-                    throw MeetingSummaryError.backendFailed(backend: "Ollama", statusCode: nil, message: message)
-                }
-                throw MeetingSummaryError.emptyResponse(backend: "Ollama")
+            do {
+                return try OllamaMeetingRequest.completedContent(from: data)
+            } catch {
+                throw MeetingSummaryError.backendFailed(backend: "Ollama", statusCode: nil, message: error.localizedDescription)
             }
-            return text
         } catch {
             throw summaryRequestError(backend: "Ollama", error: error)
         }
@@ -967,7 +955,7 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String?,
         timeout: TimeInterval
     ) async throws -> String {
-        let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -1031,7 +1019,7 @@ enum MeetingSummaryClient {
         previousMeetingNotes: String?,
         timeout: TimeInterval
     ) async throws -> String {
-        let instructions = summaryInstructions(for: template, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
+        let instructions = summaryInstructions(for: template, transcript: transcript, existingNotes: existingNotes, manualNotes: manualNotes, previousMeetingNotes: previousMeetingNotes)
         let userPrompt = summaryUserPrompt(
             transcript: transcript,
             meetingTitle: meetingTitle,
@@ -1342,30 +1330,29 @@ enum MeetingSummaryClient {
         return transcriptLabel + excerpt + notesLabel + boundedManualNotes
     }
 
-    static func titleTranscriptExcerpt(from transcript: String, segmentLength: Int = 900) -> String {
+    static func titleTranscriptExcerpt(from transcript: String, segmentLength: Int = 450) -> String {
         let normalized = transcript
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty, segmentLength > 0 else { return normalized }
-        guard normalized.count > segmentLength * 3 else { return normalized }
-
-        let start = String(normalized.prefix(segmentLength)).trimmingCharacters(in: .whitespacesAndNewlines)
-        let middleStartOffset = max(0, (normalized.count / 2) - (segmentLength / 2))
-        let middleStart = normalized.index(normalized.startIndex, offsetBy: middleStartOffset)
-        let middleEnd = normalized.index(middleStart, offsetBy: segmentLength, limitedBy: normalized.endIndex) ?? normalized.endIndex
-        let middle = String(normalized[middleStart..<middleEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let end = String(normalized.suffix(segmentLength)).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return """
-        Opening excerpt:
-        \(start)
-
-        Middle excerpt:
-        \(middle)
-
-        Closing excerpt:
-        \(end)
-        """
+        let sampleCount = 9
+        guard normalized.count > segmentLength * sampleCount else { return normalized }
+        // Spread the same bounded prompt across the meeting. Three samples can
+        // mistake a supporting example for the purpose of a long conversation.
+        return (0..<sampleCount).map { sample in
+            let offset = (normalized.count - segmentLength) * sample / (sampleCount - 1)
+            let start = normalized.index(normalized.startIndex, offsetBy: offset)
+            let end = normalized.index(start, offsetBy: segmentLength)
+            let text = normalized[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            let label: String
+            switch sample {
+            case 0: label = "Opening excerpt"
+            case sampleCount / 2: label = "Middle excerpt"
+            case sampleCount - 1: label = "Closing excerpt"
+            default: label = "Excerpt \(sample + 1) of \(sampleCount)"
+            }
+            return "\(label):\n\(text)"
+        }.joined(separator: "\n\n")
     }
 
     private static func callChatCompletions(
@@ -1574,18 +1561,9 @@ enum MeetingSummaryClient {
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
         guard (try? await LocalOllamaService.shared.prepareForSummary(at: baseURL, model: model)) != nil else { return nil }
 
-        var body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": titleInstructions],
-                ["role": "user", "content": transcript],
-            ],
-            "options": ["num_predict": 100],
-            "stream": false,
-        ]
-        if model.lowercased().hasPrefix("qwen3") {
-            body["think"] = false
-        }
+        let body = OllamaMeetingRequest.body(
+            model: model, instructions: MeetingSummaryGrounding.languageInstructions(for: transcript) + titleInstructions, prompt: transcript, outputTokens: 100
+        )
 
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = ollamaTitleTimeout
@@ -1596,13 +1574,7 @@ enum MeetingSummaryClient {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             try validateHTTPResponse(response, data: data, backend: "Ollama")
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let message = json["message"] as? [String: Any],
-                  let content = message["content"] as? String,
-                  !content.isEmpty else {
-                fputs("[summary] Ollama title generation: empty or invalid response\n", stderr)
-                return nil
-            }
+            let content = try OllamaMeetingRequest.completedContent(from: data)
             let title = content.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
             guard !title.isEmpty else {
                 fputs("[summary] Ollama title generation: trimmed response is empty\n", stderr)

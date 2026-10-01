@@ -5,7 +5,7 @@ import MuesliCore
 
 @Suite("MeetingSummaryClient")
 struct MeetingSummaryClientTests {
-    @Test("local summary menu keeps custom models and does not change defaults", arguments: ["qwen3.5:4b", "qwen3.5:9b", "gemma3:4b"])
+    @Test("local summary menu keeps custom models and does not change defaults", arguments: ["qwen3.5:4b", "qwen3.5:9b", "qwen3.6:35b", "gemma3:4b", "gemma4:12b", "gemma4:26b"])
     func localSummarySelection(model: String) {
         var config = AppConfig()
         config.meetingSummaryBackend = "ollama"
@@ -85,6 +85,9 @@ struct MeetingSummaryClientTests {
         #expect(instructions.contains("do not infer which participant said a transcript line"))
         #expect(instructions.contains("## Meeting Summary"))
         #expect(instructions.contains("## Action Items"))
+        #expect(instructions.contains("dominant language of the transcript"))
+        #expect(instructions.contains("hypotheses, disagreements, and confirmed agreements"))
+        #expect(instructions.contains("the transcript takes priority"))
     }
 
     @Test("summary instructions include custom template prompt verbatim")
@@ -868,6 +871,17 @@ struct MeetingSummaryClientTests {
         let excerpt = MeetingSummaryClient.titleTranscriptExcerpt(from: transcript, segmentLength: 120)
 
         #expect(excerpt == transcript)
+    }
+
+    @Test("title excerpts include topics between the opening middle and ending")
+    func titleExcerptIncludesIntermediateTopics() {
+        let transcript = String(repeating: ".", count: 2_500)
+            + "early main topic" + String(repeating: ".", count: 4_984)
+            + "late main topic" + String(repeating: ".", count: 2_485)
+        let excerpt = MeetingSummaryClient.titleTranscriptExcerpt(from: transcript)
+        #expect(excerpt.contains("early main topic"))
+        #expect(excerpt.contains("late main topic"))
+        #expect(excerpt.count < 6_000)
     }
 
     @Test("generateTitle returns nil for OpenRouter without key")

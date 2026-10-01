@@ -1277,7 +1277,8 @@ enum CLISummaryClient {
         }
     }
 
-    private static func systemPrompt() -> String {
+    private static func systemPrompt(transcript: String) -> String {
+        MeetingSummaryGrounding.languageInstructions(for: transcript) +
         """
         You are a meeting notes assistant. Given a raw meeting transcript, produce concise, professional markdown notes.
         Do not invent facts. Prefer concrete takeaways over filler. Capture owners only when they are actually mentioned.
@@ -1294,6 +1295,7 @@ enum CLISummaryClient {
         ## Action Items
         - Owner: task
         """
+        + MeetingSummaryGrounding.instructions
     }
 
     private static func userPrompt(transcript: String, title: String) -> String {
@@ -1304,7 +1306,7 @@ enum CLISummaryClient {
         let body: [String: Any] = [
             "model": model,
             "input": [
-                ["role": "system", "content": systemPrompt()],
+                ["role": "system", "content": systemPrompt(transcript: transcript)],
                 ["role": "user", "content": userPrompt(transcript: transcript, title: title)],
             ],
             "reasoning": ["effort": "low"],
@@ -1324,7 +1326,7 @@ enum CLISummaryClient {
         let body: [String: Any] = [
             "model": model,
             "messages": [
-                ["role": "system", "content": systemPrompt()],
+                ["role": "system", "content": systemPrompt(transcript: transcript)],
                 ["role": "user", "content": userPrompt(transcript: transcript, title: title)],
             ],
             "max_tokens": defaultSummaryMaxOutputTokens,
@@ -1340,33 +1342,20 @@ enum CLISummaryClient {
 
     private static func ollamaSummary(url: URL, model: String, transcript: String, title: String) async throws -> String {
         try await LocalOllamaService.shared.prepareForSummary(at: url.deletingLastPathComponent().deletingLastPathComponent(), model: model)
-        var body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": systemPrompt()],
-                ["role": "user", "content": userPrompt(transcript: transcript, title: title)],
-            ],
-            "stream": false,
-            "options": ["num_predict": defaultSummaryMaxOutputTokens],
-        ]
-        if model.lowercased().hasPrefix("qwen3") {
-            body["think"] = false
-        }
+        let body = OllamaMeetingRequest.body(
+            model: model, instructions: systemPrompt(transcript: transcript),
+            prompt: userPrompt(transcript: transcript, title: title),
+            outputTokens: OllamaMeetingRequest.summaryOutputTokens
+        )
         let data = try await postJSON(url: url, apiKey: "", body: body, backend: "Ollama")
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let message = json["message"] as? [String: Any],
-              let text = message["content"] as? String,
-              !text.isEmpty else {
-            throw CLISummaryError.emptyResponse("Ollama returned an empty summary response.")
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try OllamaMeetingRequest.completedContent(from: data)
     }
 
     private static func anthropicSummary(url: URL, apiKey: String, model: String, transcript: String, title: String) async throws -> String {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": defaultSummaryMaxOutputTokens,
-            "system": systemPrompt(),
+            "system": systemPrompt(transcript: transcript),
             "messages": [
                 ["role": "user", "content": userPrompt(transcript: transcript, title: title)],
             ],

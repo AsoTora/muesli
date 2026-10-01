@@ -843,7 +843,10 @@ struct SummaryModelPreset {
         SummaryModelPreset(id: "qwen3.5", label: "Qwen 3.5 (default)"),
         SummaryModelPreset(id: "qwen3.5:4b", label: "Qwen 3.5 4B"),
         SummaryModelPreset(id: "qwen3.5:9b", label: "Qwen 3.5 9B"),
+        SummaryModelPreset(id: "qwen3.6:35b", label: "Qwen 3.6 35B (24 GB download)"),
         SummaryModelPreset(id: "gemma3:4b", label: "Gemma 3 4B"),
+        SummaryModelPreset(id: "gemma4:12b", label: "Gemma 4 12B"),
+        SummaryModelPreset(id: "gemma4:26b", label: "Gemma 4 26B"),
     ]
 
     static let openAIModels: [SummaryModelPreset] = [
