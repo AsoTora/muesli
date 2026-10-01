@@ -5,6 +5,21 @@ import MuesliCore
 
 @Suite("MeetingSummaryClient")
 struct MeetingSummaryClientTests {
+    @Test("local summary menu keeps custom models and does not change defaults", arguments: ["qwen3.5:4b", "qwen3.5:9b", "gemma3:4b"])
+    func localSummarySelection(model: String) {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "ollama"
+        config.ollamaModel = "my-local-model:latest"
+        let provider = MeetingSummaryBackendOption.ollama
+        let menu = provider.summaryModels(config: config, openRouterModels: [])
+        #expect(menu.contains { $0.id == model })
+        #expect(menu.filter { $0.id == config.ollamaModel }.count == 1)
+        let selected = provider.summaryConfiguration(from: config, model: model)
+        #expect(selected.ollamaModel == model)
+        #expect(selected.meetingSummaryBackend == "ollama")
+        #expect(config.ollamaModel == "my-local-model:latest")
+    }
+
     @Test("one-request choices preserve settings and route each provider's model",
           arguments: MeetingSummaryBackendOption.all)
     func oneRequestSummarySelection(provider: MeetingSummaryBackendOption) throws {

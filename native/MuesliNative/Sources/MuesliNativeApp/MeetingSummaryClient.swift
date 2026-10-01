@@ -785,7 +785,7 @@ enum MeetingSummaryClient {
             visualContext: visualContext,
             previousMeetingNotes: previousMeetingNotes
         )
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "messages": [
                 ["role": "system", "content": instructions],
@@ -794,6 +794,11 @@ enum MeetingSummaryClient {
             "stream": false,
             "options": ["num_predict": defaultSummaryMaxOutputTokens],
         ]
+        // Qwen can spend the entire token budget on reasoning and return no notes.
+        // Keep other model families' thinking defaults unchanged.
+        if model.lowercased().hasPrefix("qwen3") {
+            body["think"] = false
+        }
 
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = ollamaSummaryTimeout
@@ -1567,7 +1572,7 @@ enum MeetingSummaryClient {
         let configuredModel = config.ollamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuredModel.isEmpty ? defaultOllamaModel : configuredModel
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "messages": [
                 ["role": "system", "content": titleInstructions],
@@ -1576,6 +1581,9 @@ enum MeetingSummaryClient {
             "options": ["num_predict": 100],
             "stream": false,
         ]
+        if model.lowercased().hasPrefix("qwen3") {
+            body["think"] = false
+        }
 
         var request = URLRequest(url: chatURL)
         request.timeoutInterval = ollamaTitleTimeout

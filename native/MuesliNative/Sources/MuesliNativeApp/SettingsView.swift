@@ -1905,11 +1905,17 @@ struct SettingsView: View {
                     .frame(height: 22)
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Model", controlWidth: meetingControlWidth) {
-                    settingsModelTextField(
-                        currentModel: appState.config.ollamaModel,
-                        placeholder: "qwen3.5"
-                    ) { val in controller.updateConfig { $0.ollamaModel = val } }
+                settingsRow("Model", description: "Download the selected model in Ollama first. You can also enter another installed model ID.", controlWidth: meetingControlWidth) {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        settingsModelMenu(
+                            currentModel: appState.config.ollamaModel,
+                            presets: SummaryModelPreset.ollamaModels
+                        ) { val in controller.updateConfig { $0.ollamaModel = val } }
+                        settingsModelTextField(
+                            currentModel: appState.config.ollamaModel,
+                            placeholder: "qwen3.5"
+                        ) { val in controller.updateConfig { $0.ollamaModel = val } }
+                    }
                 }
             } else if appState.selectedMeetingSummaryBackend == .lmStudio {
                 settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {

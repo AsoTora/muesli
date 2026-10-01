@@ -1339,7 +1339,7 @@ enum CLISummaryClient {
     }
 
     private static func ollamaSummary(url: URL, model: String, transcript: String, title: String) async throws -> String {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "messages": [
                 ["role": "system", "content": systemPrompt()],
@@ -1348,6 +1348,9 @@ enum CLISummaryClient {
             "stream": false,
             "options": ["num_predict": defaultSummaryMaxOutputTokens],
         ]
+        if model.lowercased().hasPrefix("qwen3") {
+            body["think"] = false
+        }
         let data = try await postJSON(url: url, apiKey: "", body: body, backend: "Ollama")
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let message = json["message"] as? [String: Any],

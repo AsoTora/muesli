@@ -838,6 +838,14 @@ struct SummaryModelPreset {
     let id: String
     let label: String
 
+    /// Model IDs must match the tags installed in the local Ollama server.
+    static let ollamaModels: [SummaryModelPreset] = [
+        SummaryModelPreset(id: "qwen3.5", label: "Qwen 3.5 (default)"),
+        SummaryModelPreset(id: "qwen3.5:4b", label: "Qwen 3.5 4B"),
+        SummaryModelPreset(id: "qwen3.5:9b", label: "Qwen 3.5 9B"),
+        SummaryModelPreset(id: "gemma3:4b", label: "Gemma 3 4B"),
+    ]
+
     static let openAIModels: [SummaryModelPreset] = [
         SummaryModelPreset(id: "gpt-5.4-mini", label: "GPT-5.4 Mini (default)"),
         SummaryModelPreset(id: "gpt-6-astra", label: "GPT-6 Astra"),
@@ -1074,7 +1082,7 @@ extension MeetingSummaryBackendOption {
         case .openRouter:
             presets = [SummaryModelPreset.openRouterModels[0]]
                 + openRouterModels.filter { $0.id != "openrouter/free" }
-        case .ollama: presets = [SummaryModelPreset(id: "qwen3.5", label: "qwen3.5 (default)")]
+        case .ollama: presets = SummaryModelPreset.ollamaModels
         default: presets = []
         }
         return SummaryModelPreset.menuPresets(presets, currentModel: config[keyPath: modelKeyPath])
