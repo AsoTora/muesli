@@ -17,6 +17,35 @@ enum SyncOriginDisplay {
     }
 }
 
+extension RecordOriginFilter {
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .thisMac: return "This Mac"
+        case .fromIPhone: return "From iPhone"
+        }
+    }
+}
+
+struct RecordOriginPicker: View {
+    @Binding var selection: RecordOriginFilter
+
+    var body: some View {
+        Picker("Record source", selection: $selection) {
+            ForEach(RecordOriginFilter.allCases, id: \.self) { origin in
+                Text(origin.label).tag(origin)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        // The segmented control's intrinsic width is wider than a hardcoded frame, and the extra
+        // width bleeds out of it — which pushed the filter row past the page's leading padding.
+        .fixedSize()
+        .help("Filter by the device where the recording was created")
+        .accessibilityLabel("Record source")
+    }
+}
+
 struct SyncOriginBadge: View {
     let label: String
     var help: String = SyncOriginDisplay.iOSBadgeHelp

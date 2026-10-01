@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
 
@@ -54,7 +55,9 @@ jobs:
               FILES=""
             fi
           else
-            FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
+            # Manual dispatch is an explicit request for the complete pipeline.
+            # Empty input makes the classifier fail closed to all checks.
+            FILES=""
           fi
 
           echo "Changed files:"
@@ -73,27 +76,50 @@ jobs:
       - name: Test changed-file classifier
         run: ./scripts/test_classify_changed_files.sh
 
-  # Release build — validate the app product compiles in release mode
+      - name: Test CI test shard assignments
+        run: ./scripts/test_ci_test_shards.sh
+
+      - name: Test append-only appcast updates
+        run: python3 ./scripts/test_merge_appcast_item.py
+
+      - name: Test LocalVQE runtime validation
+        run: ./scripts/test_localvqe_runtime_validation.sh
+
+  # MLX Swift 0.31.6 requires Swift 6.3; Xcode 26.6 is available on macos-26.
+  # Drafts get debug tests and packaging feedback; release compilation is
+  # required once ready for review, and on main/manual runs.
   build_release:
     needs: changes
-    if: needs.changes.outputs.full_ci == 'true'
-    runs-on: macos-15
+    if: >-
+      needs.changes.outputs.native_or_packaging == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: macos-26
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      - name: Report native toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
       - name: Build (release)
         run: swift build --package-path native/MuesliNative -c release --product MuesliNativeApp
 
-  # Swift tests — sharded by domain to reduce end-to-end wall time
+  # Swift tests — includes AppleSpeechAnalyzerBackendTests on macOS 26 in
+  # dictation-transcription; a separate same-toolchain job would duplicate it.
   test_shards:
     needs: changes
-    if: needs.changes.outputs.full_ci == 'true'
-    runs-on: macos-15
+    if: needs.changes.outputs.native_or_packaging == 'true'
+    runs-on: macos-26
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     strategy:
       fail-fast: false
       matrix:
@@ -105,22 +131,44 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Report native toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
       - name: Run test shard
         run: bash ./scripts/run_ci_test_shard.sh "${{ matrix.shard }}"
 
   # Packaged CLI smoke test — verify the app bundle contains muesli-cli
   cli-smoke:
     needs: changes
-    if: needs.changes.outputs.full_ci == 'true'
-    runs-on: macos-15
+    if: needs.changes.outputs.native_or_packaging == 'true'
+    runs-on: macos-26
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      - name: Report native toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Cache LocalVQE runtime build
+        uses: actions/cache@v4
+        with:
+          path: |
+            native/MuesliNative/LocalVQE/lib
+            /tmp/LocalVQE
+          key: localvqe-${{ runner.os }}-${{ hashFiles('scripts/build_localvqe.sh') }}
+
       - name: Verify packaged CLI bundle
+        # Builds LocalVQE when missing, then asserts the packaged app includes
+        # a complete LocalVQE runtime + the committed GGUF model.
         run: ./scripts/test_packaged_cli.sh
 
   # Sparkle appcast/update metadata smoke test — catches broken release URLs,
@@ -139,6 +187,9 @@ jobs:
       - name: Verify Sparkle update metadata
         run: ./scripts/verify_update_flow.sh --skip-dmg
 
+      - name: Test CloudKit release entitlement contract
+        run: python3 ./scripts/test_verify_cloud_entitlements.py
+
   # Gate job — always runs, always reports a status
   # This is the only required check in branch protection
   ci-gate:
@@ -146,8 +197,22 @@ jobs:
     needs: [changes, classifier-tests, build_release, test_shards, cli-smoke, update-flow]
     runs-on: ubuntu-latest
     steps:
-      - name: Check result
+      # A successful draft gate could otherwise be reused on the same SHA when
+      # the PR becomes ready, before its release build finishes.
+      - name: Require a ready-for-review run
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == true
         run: |
+          echo "::notice::Draft validation finished. Mark the PR ready for review to run the required merge checks."
+          exit 1
+
+      - name: Check result
+        env:
+          RELEASE_REQUIRED: ${{ needs.changes.outputs.native_or_packaging == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+        run: |
+          if [[ "$RELEASE_REQUIRED" == "true" && "${{ needs.build_release.result }}" != "success" ]]; then
+            echo "Required release build did not succeed."
+            exit 1
+          fi
           if [[ "${{ needs.changes.result }}" == "success" ]] && \
              [[ "${{ needs.classifier-tests.result }}" == "success" ]] && \
              [[ "${{ needs.build_release.result }}" =~ ^(success|skipped)$ ]] && \

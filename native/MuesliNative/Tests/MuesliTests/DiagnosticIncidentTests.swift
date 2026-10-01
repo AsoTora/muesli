@@ -157,6 +157,23 @@ struct DiagnosticIncidentTests {
         #expect(incident.telemetryParameters["diagnostic.user_impact"] == "degraded_result")
     }
 
+    @Test("meeting microphone failure is privacy-safe degraded telemetry")
+    func meetingMicrophoneFailureIsDegraded() {
+        let incident = DiagnosticIncident(
+            kind: .meetingMicrophoneCaptureFailed,
+            severity: .warning,
+            stage: .meetingMicrophoneCapture,
+            error: nil,
+            metadata: metadata
+        )
+
+        #expect(incident.userImpact == .degradedResult)
+        #expect(incident.telemetryCategory == .appState)
+        #expect(incident.telemetryParameters["diagnostic.stage"] == "meeting_microphone_capture")
+        #expect(incident.telemetryParameters["diagnostic.error_domain"] == nil)
+        #expect(incident.telemetryParameters["diagnostic.error_code"] == nil)
+    }
+
     @Test("domain fallback covers Swift enum style diagnostic errors")
     func domainFallbackCoversSwiftEnumErrors() {
         let meaning = DiagnosticErrorCatalog.meaning(
@@ -231,6 +248,7 @@ struct DiagnosticIncidentReporterTests {
             appState: appState,
             defaults: defaults,
             telemetrySink: { sent.append($0) },
+            automaticPromptEnabled: { true },
             onPrompt: { prompted.append($0) }
         )
 
@@ -260,6 +278,7 @@ struct DiagnosticIncidentReporterTests {
             appState: appState,
             defaults: defaults,
             telemetrySink: { sent.append($0) },
+            automaticPromptEnabled: { true },
             onPrompt: { restartedPrompted.append($0) }
         )
         let third = restartedReporter.record(
@@ -271,5 +290,29 @@ struct DiagnosticIncidentReporterTests {
         #expect(sent.map(\.id) == [first.id, second.id, third.id])
         #expect(restartedPrompted.isEmpty)
         #expect(appState.pendingDiagnosticIncident == nil)
+    }
+
+    @Test("default-off automatic reporting still records telemetry")
+    func defaultOffStillRecordsTelemetry() {
+        let appState = AppState()
+        var sent: [DiagnosticIncident] = []
+        var prompted: [DiagnosticIncident] = []
+        let reporter = DiagnosticIncidentReporter(
+            appState: appState,
+            telemetrySink: { sent.append($0) },
+            onPrompt: { prompted.append($0) }
+        )
+
+        let incident = reporter.record(
+            kind: .dictationTranscriptionFailed,
+            stage: .standardDictationTranscribe
+        )
+
+        #expect(sent.map(\.id) == [incident.id])
+        #expect(prompted.isEmpty)
+        #expect(appState.pendingDiagnosticIncident == nil)
+
+        reporter.recordManualReport()
+        #expect(appState.pendingDiagnosticIncident?.kind == .manualReport)
     }
 }

@@ -1,5 +1,27 @@
-import SwiftUI
+import FluidAudio
 import MuesliCore
+import SwiftUI
+
+struct ModelDownloadGenerationState: Equatable {
+    private(set) var current: UUID?
+
+    mutating func begin() -> UUID {
+        let generation = UUID()
+        current = generation
+        return generation
+    }
+
+    func contains(_ generation: UUID) -> Bool {
+        current == generation
+    }
+
+    @discardableResult
+    mutating func clear(_ generation: UUID) -> Bool {
+        guard current == generation else { return false }
+        current = nil
+        return true
+    }
+}
 
 struct ModelsView: View {
     let appState: AppState
@@ -8,12 +30,25 @@ struct ModelsView: View {
     @State private var nemotron35UpdateAvailable = false
     @State private var downloadingModels: Set<String> = []
     @State private var downloadProgress: [String: Double] = [:]
+    @State private var downloadMessages: [String: String] = [:]
+    @State private var downloadSnapshots: [String: ModelDownloadProgress] = [:]
+    @State private var downloadGenerations: [String: UUID] = [:]
     @State private var downloadedModels: Set<String> = []
     @State private var downloadTasks: [String: Task<Void, Never>] = [:]
     @State private var modelToDelete: BackendOption?
     @State private var selectedParakeetModel: String
     @State private var selectedWhisperModel: String
+    @State private var selectedBodhanCoreModel: String
+    @State private var selectedBodhanFlexModel: String
     @State private var showExperimental: Bool
+    @State private var appleSpeechLanguageOptions: [AppleSpeechLanguageOption] = [.system]
+    @State private var isLiveCaptionModelDownloaded = false
+    @State private var isDownloadingLiveCaptionModel = false
+    @State private var isCancellingLiveCaptionModelDownload = false
+    @State private var liveCaptionDownloadProgress = 0.0
+    @State private var liveCaptionDownloadTask: Task<Void, Never>?
+    @State private var liveCaptionDownloadGeneration = ModelDownloadGenerationState()
+    @State private var showDeleteLiveCaptionModelConfirmation = false
 
     // Post-processor state
     @State private var downloadingPostProcModels: Set<String> = []
@@ -27,74 +62,62 @@ struct ModelsView: View {
         self.controller = controller
 
         let active = appState.selectedBackend
-        _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetMultilingual.model)
+        _selectedParakeetModel = State(initialValue: BackendOption.parakeetFamily.contains(active) ? active.model : BackendOption.parakeetUnified.model)
         _selectedWhisperModel = State(initialValue: BackendOption.whisperFamily.contains(active) ? active.model : BackendOption.whisperSmall.model)
-        _showExperimental = State(initialValue: false)
+        let bodhan = BodhanModel(rawValue: active.model)
+        _selectedBodhanCoreModel = State(initialValue: bodhan?.isCore == true ? active.model : BodhanModel.coreInt8.rawValue)
+        _selectedBodhanFlexModel = State(initialValue: bodhan?.isCore == false ? active.model : BodhanModel.flexInt8.rawValue)
+        _showExperimental = State(initialValue: appState.activeFeatureTourTarget == .experimentalModels)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-                Text("Models")
-                    .font(MuesliTheme.title1())
-                    .foregroundStyle(MuesliTheme.textPrimary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
+                    Text("Models")
+                        .font(MuesliTheme.title1())
+                        .foregroundStyle(MuesliTheme.textPrimary)
 
-                Text("Download and manage transcription models. The active model is used for dictation.")
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textSecondary)
+                    Text("Choose the dictation, live meeting, cleanup, and Quill models that fit how you speak and work.")
+                        .font(MuesliTheme.body())
+                        .foregroundStyle(MuesliTheme.textSecondary)
 
-                familyCard(
-                    title: "Parakeet Family",
-                    subtitle: "NVIDIA speech models for fast everyday dictation.",
-                    defaultBadge: "Default: v3",
-                    logo: "nvidia-logo",
-                    selection: $selectedParakeetModel,
-                    options: BackendOption.parakeetFamily
-                )
-
-                familyCard(
-                    title: "Whisper",
-                    subtitle: "OpenAI Whisper variants. Runs on Apple Neural Engine via CoreML.",
-                    defaultBadge: "Default: Small",
-                    logo: "openai-logo",
-                    selection: $selectedWhisperModel,
-                    options: BackendOption.whisperFamily
-                )
-
-                modelCard(option: .cohereTranscribe, logo: "cohere-logo")
-
-                modelCard(option: .nemotron35Multilingual, logo: "nvidia-logo")
-
-                experimentalSection
-
-                postProcessorSection
-
-                if !BackendOption.comingSoon.isEmpty {
-                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                        Text("COMING SOON")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(MuesliTheme.textTertiary)
-                            .textCase(.uppercase)
-                            .padding(.leading, 2)
-                            .padding(.top, MuesliTheme.spacing8)
-
-                        VStack(spacing: MuesliTheme.spacing12) {
-                            ForEach(BackendOption.comingSoon, id: \.model) { option in
-                                comingSoonCard(option: option)
-                            }
+                    Picker("Model category", selection: modelsCategorySelection) {
+                        ForEach(ModelsCategory.allCases) { category in
+                            Text(category.title).tag(category)
                         }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 600)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .id(FeatureTourTarget.modelLibrary.rawValue)
+                    .featureTourTarget(.modelLibrary)
+
+                    selectedCategoryContent
                 }
+                .padding(.horizontal, MuesliTheme.spacing32)
+            .padding(.top, MuesliTheme.pageTop)
+            .padding(.bottom, MuesliTheme.spacing32)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(MuesliTheme.spacing32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+                revealFeatureTourTargetIfNeeded(using: proxy)
+            }
+            .onChange(of: activeFeatureTourTarget) { _, _ in
+                // The reveal helper owns target filtering. A second allowlist here
+                // can miss model-to-model transitions while this view stays mounted.
+                revealFeatureTourTargetIfNeeded(using: proxy)
+            }
         }
         .background(MuesliTheme.backgroundBase)
         .onAppear {
             checkDownloadedModels()
             checkDownloadedPostProcModels()
+            isLiveCaptionModelDownloaded = MeetingLiveCaptionModelStore.isDownloaded()
             syncSelectionsFromActiveBackend()
             checkNemotron35Update()
+            loadAppleSpeechLanguageOptions()
         }
         .onChange(of: appState.selectedBackend.model) { _, _ in
             syncSelectionsFromActiveBackend()
@@ -133,7 +156,392 @@ struct ModelsView: View {
                 postProcModelToDelete = nil
             }
         } message: {
-            Text("The downloaded model files will be removed from this Mac. You can download the model again later.")
+            Text(postProcessorDeleteMessage)
+        }
+        .alert(
+            "Delete \"\(MeetingLiveCaptionModelStore.label)\"?",
+            isPresented: $showDeleteLiveCaptionModelConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                deleteLiveCaptionModel()
+            }
+        } message: {
+            Text("Live meetings will fall back to standard chunk-by-chunk captions until this model is downloaded again.")
+        }
+    }
+
+    private var modelsCategorySelection: Binding<ModelsCategory> {
+        Binding(
+            get: { appState.selectedModelsCategory },
+            set: { appState.selectedModelsCategory = $0 }
+        )
+    }
+
+    private var postProcessorDeleteMessage: String {
+        guard let option = postProcModelToDelete, !option.isDownloadable else {
+            return "The downloaded model files will be removed from this Mac. You can download the model again later."
+        }
+        return "The downloaded model files will be removed from this Mac. This legacy model is no longer available to download, so deleting it is permanent."
+    }
+
+    @ViewBuilder
+    private var selectedCategoryContent: some View {
+        switch appState.selectedModelsCategory {
+        case .dictation:
+            ForEach(BackendOption.systemManaged, id: \.model) { option in
+                let featureTourTarget: FeatureTourTarget? = option.backend == BackendOption.appleSpeechAnalyzer.backend
+                    ? .appleSpeechCard
+                    : nil
+                modelCard(
+                    option: option,
+                    logo: logoForBackend(option),
+                    downloadedLabel: "Available"
+                )
+                .id(featureTourTarget?.rawValue ?? option.model)
+                .featureTourTarget(featureTourTarget)
+            }
+
+            familyCard(
+                title: "Parakeet Family",
+                subtitle: "The most responsive choices for everyday dictation, with multilingual and English-only options.",
+                defaultBadge: "Recommended: Unified",
+                logo: "nvidia-logo",
+                selection: $selectedParakeetModel,
+                options: BackendOption.parakeetFamily
+            )
+            .id(FeatureTourTarget.parakeetFamilyCard.rawValue)
+            .featureTourTarget(.parakeetFamilyCard)
+
+            familyCard(
+                title: "Whisper",
+                subtitle: "Dependable alternatives when you prefer Whisper's transcription style or need broader multilingual coverage.",
+                defaultBadge: "Default: Small",
+                logo: "openai-logo",
+                selection: $selectedWhisperModel,
+                options: BackendOption.whisperFamily
+            )
+
+            modelCard(option: .cohereTranscribe, logo: "cohere-logo")
+            bodhanCard(selection: $selectedBodhanCoreModel, isCore: true)
+            bodhanCard(selection: $selectedBodhanFlexModel, isCore: false)
+                .id(FeatureTourTarget.bodhanFlexCard.rawValue)
+                .featureTourTarget(.bodhanFlexCard)
+            experimentalSection
+            comingSoonSection
+        case .streaming:
+            streamingSection
+        case .postProcessing:
+            postProcessorSection
+        case .quill:
+            quillSection
+        }
+    }
+
+    @ViewBuilder
+    private var comingSoonSection: some View {
+        if !BackendOption.comingSoon.isEmpty {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                Text("COMING SOON")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .textCase(.uppercase)
+                    .padding(.leading, 2)
+                    .padding(.top, MuesliTheme.spacing8)
+
+                VStack(spacing: MuesliTheme.spacing12) {
+                    ForEach(BackendOption.comingSoon, id: \.model) { option in
+                        comingSoonCard(option: option)
+                    }
+                }
+            }
+        }
+    }
+
+    private var activeFeatureTourTarget: FeatureTourTarget? {
+        appState.activeFeatureTourTarget
+    }
+
+    private func revealFeatureTourTargetIfNeeded(using proxy: ScrollViewProxy) {
+        let target: FeatureTourTarget
+        switch activeFeatureTourTarget {
+        case .modelLibrary:
+            target = .modelLibrary
+            appState.selectedModelsCategory = .dictation
+        case .appleSpeechCard:
+            target = .appleSpeechCard
+            appState.selectedModelsCategory = .dictation
+        case .parakeetFamilyCard:
+            target = .parakeetFamilyCard
+            appState.selectedModelsCategory = .dictation
+        case .bodhanFlexCard:
+            target = .bodhanFlexCard
+            appState.selectedModelsCategory = .dictation
+        case .streamingModels:
+            target = .streamingModels
+            appState.selectedModelsCategory = .streaming
+        case .experimentalModels:
+            target = .experimentalModels
+            appState.selectedModelsCategory = .dictation
+            showExperimental = true
+        default:
+            return
+        }
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(target.rawValue, anchor: .center)
+        }
+    }
+
+    private var streamingSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                Text("LIVE MEETINGS")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+
+                Text("Choose how words appear while a meeting is in progress. Apple Speech and Nemotron also create the saved transcript; Parakeet provides a provisional preview.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+            .padding(.leading, 2)
+            .padding(.top, MuesliTheme.spacing8)
+            .id(FeatureTourTarget.streamingModels.rawValue)
+            .featureTourTarget(.streamingModels)
+
+            if BackendOption.systemManaged.contains(.appleSpeechAnalyzer) {
+                let option = BackendOption.appleSpeechAnalyzer
+                modelCard(
+                    option: option,
+                    logo: logoForBackend(option),
+                    isActive: appState.config.enableLiveStreamingPartials
+                        && appState.config.resolvedMeetingLiveCaptionBackend == .appleSpeech,
+                    onSetActive: {
+                        controller.updateConfig {
+                            $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.appleSpeech.rawValue
+                            $0.enableLiveStreamingPartials = true
+                        }
+                    },
+                    description: "Apple's private, on-device streaming transcription on macOS 26. Finalized speech becomes your saved transcript; your regular meeting model recovers any audio the live stream could not finish.",
+                    downloadedLabel: "Available"
+                )
+            }
+
+            ForEach(BackendOption.streaming, id: \.model) { option in
+                if let liveCaptionBackend = MeetingLiveCaptionBackend(rawValue: option.backend) {
+                    modelCard(
+                        option: option,
+                        logo: logoForBackend(option),
+                        isActive: appState.config.enableLiveStreamingPartials
+                            && appState.config.resolvedMeetingLiveCaptionBackend == liveCaptionBackend,
+                        onSetActive: {
+                            controller.updateConfig {
+                                $0.meetingLiveCaptionBackend = liveCaptionBackend.rawValue
+                                $0.enableLiveStreamingPartials = true
+                            }
+                        }
+                    )
+                }
+            }
+
+            liveCaptionModelCard
+        }
+    }
+
+    private var liveCaptionModelCard: some View {
+        let isActive = isLiveCaptionModelDownloaded
+            && appState.config.enableLiveStreamingPartials
+            && appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU
+
+        return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                brandLogo("nvidia-logo")
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        Text(MeetingLiveCaptionModelStore.label)
+                            .font(MuesliTheme.headline())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+
+                        Text(MeetingLiveCaptionModelStore.sizeLabel)
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                    }
+
+                    Text("Fast English captions while a meeting is in progress. They are a provisional preview; your regular meeting model creates the transcript you keep.")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                Spacer()
+
+                if isActive {
+                    Text("Active")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.success)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.success.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                } else if isLiveCaptionModelDownloaded {
+                    Text("Ready")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            if isDownloadingLiveCaptionModel {
+                downloadProgressView(
+                    for: MeetingLiveCaptionModelStore.modelID,
+                    fallbackProgress: liveCaptionDownloadProgress
+                )
+            }
+
+            HStack(spacing: MuesliTheme.spacing8) {
+                if isDownloadingLiveCaptionModel {
+                    Button(isCancellingLiveCaptionModelDownload ? "Pausing…" : "Cancel") {
+                        guard !isCancellingLiveCaptionModelDownload else { return }
+                        let task = liveCaptionDownloadTask
+                        task?.cancel()
+                        let cancellationGeneration = liveCaptionDownloadGeneration.begin()
+                        isCancellingLiveCaptionModelDownload = true
+                        Task {
+                            let shouldCancel = await MainActor.run {
+                                liveCaptionDownloadGeneration.contains(cancellationGeneration)
+                            }
+                            guard shouldCancel else { return }
+                            await ManagedASRModelDownloader.cancelAndWait(
+                                modelID: MeetingLiveCaptionModelStore.modelID
+                            )
+                            _ = await task?.value
+                            await MainActor.run {
+                                guard liveCaptionDownloadGeneration.clear(cancellationGeneration) else { return }
+                                liveCaptionDownloadTask = nil
+                                isDownloadingLiveCaptionModel = false
+                                isCancellingLiveCaptionModelDownload = false
+                                liveCaptionDownloadProgress = 0
+                            }
+                        }
+                        liveCaptionDownloadProgress = 0
+                        if let snapshot = downloadSnapshots[MeetingLiveCaptionModelStore.modelID] {
+                            downloadSnapshots[MeetingLiveCaptionModelStore.modelID] = snapshot.replacing(
+                                phase: .paused,
+                                message: "Paused — select Download to resume"
+                            )
+                        }
+                    }
+                    .disabled(isCancellingLiveCaptionModelDownload)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                } else if isLiveCaptionModelDownloaded {
+                    if !isActive {
+                        Button("Set Active") {
+                            controller.updateConfig {
+                                $0.meetingLiveCaptionBackend = MeetingLiveCaptionBackend.parakeetRealtimeEOU.rawValue
+                                $0.enableLiveStreamingPartials = true
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MuesliTheme.accent)
+                        .padding(.horizontal, MuesliTheme.spacing12)
+                        .padding(.vertical, 4)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    }
+
+                    Button {
+                        showDeleteLiveCaptionModelConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.6))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!controller.canModifyModelFiles)
+                    .help("Delete live caption model")
+                } else {
+                    Button("Download") {
+                        startLiveCaptionModelDownload()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MuesliTheme.accent)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing16)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.6) : MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private func startLiveCaptionModelDownload() {
+        guard !isDownloadingLiveCaptionModel else { return }
+        isCancellingLiveCaptionModelDownload = false
+        isDownloadingLiveCaptionModel = true
+        liveCaptionDownloadProgress = 0
+        downloadSnapshots.removeValue(forKey: MeetingLiveCaptionModelStore.modelID)
+        let generation = liveCaptionDownloadGeneration.begin()
+        liveCaptionDownloadTask = Task {
+            do {
+                try await MeetingLiveCaptionModelStore.download { progress in
+                    Task { @MainActor in
+                        guard liveCaptionDownloadGeneration.contains(generation) else { return }
+                        liveCaptionDownloadProgress = progress
+                    }
+                } progressSnapshot: { snapshot in
+                    Task { @MainActor in
+                        guard liveCaptionDownloadGeneration.contains(generation) else { return }
+                        downloadSnapshots[MeetingLiveCaptionModelStore.modelID] = snapshot
+                        if let fraction = snapshot.fractionCompleted {
+                            liveCaptionDownloadProgress = fraction
+                        }
+                    }
+                }
+                guard !Task.isCancelled,
+                      liveCaptionDownloadGeneration.contains(generation)
+                else { return }
+                isLiveCaptionModelDownloaded = true
+            } catch is CancellationError {
+                // Cancellation is an expected user action.
+            } catch {
+                fputs("[muesli-native] live caption model download failed: \(error)\n", stderr)
+            }
+            guard liveCaptionDownloadGeneration.clear(generation) else { return }
+            isDownloadingLiveCaptionModel = false
+            isCancellingLiveCaptionModelDownload = false
+            liveCaptionDownloadProgress = 0
+            liveCaptionDownloadTask = nil
+            if isLiveCaptionModelDownloaded {
+                downloadSnapshots.removeValue(forKey: MeetingLiveCaptionModelStore.modelID)
+            }
+        }
+    }
+
+    private func deleteLiveCaptionModel() {
+        guard let mutation = controller.beginModelFileMutation() else { return }
+        defer { controller.endModelFileMutation(mutation) }
+        do {
+            try MeetingLiveCaptionModelStore.delete()
+            isLiveCaptionModelDownloaded = false
+            if appState.config.resolvedMeetingLiveCaptionBackend == .parakeetRealtimeEOU {
+                controller.updateConfig { $0.enableLiveStreamingPartials = false }
+            }
+        } catch {
+            fputs("[muesli-native] live caption model delete failed: \(error)\n", stderr)
         }
     }
 
@@ -154,7 +562,7 @@ struct ModelsView: View {
                                 .foregroundStyle(MuesliTheme.textSecondary)
                         }
 
-                        Text("SenseVoice, Qwen, Indic ASR, and legacy streaming backends. Hidden by default because these are still slower and less polished.")
+                        Text("Early models for specific languages and evaluation. Expect less consistent transcripts, and try them with your own voice before relying on them.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(MuesliTheme.textPrimary)
                             .opacity(0.8)
@@ -162,7 +570,7 @@ struct ModelsView: View {
 
                     Spacer()
 
-                    Text("IYKYK")
+                    Text("Early access")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .padding(.horizontal, 8)
@@ -173,11 +581,21 @@ struct ModelsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .featureTourTarget(.experimentalModels)
 
             if showExperimental {
                 VStack(spacing: MuesliTheme.spacing12) {
                     ForEach(BackendOption.experimental, id: \.model) { option in
-                        modelCard(option: option, logo: logoForBackend(option))
+                        if !appState.selectedPostProcessorBackend.isCompatible(with: option) {
+                            modelCard(
+                                option: option,
+                                logo: logoForBackend(option),
+                                downloadedLabel: "Used for Cleanup",
+                                activationDisabledReason: "Unavailable while Gemma 4 is selected for cleanup. Choose another cleanup backend first."
+                            )
+                        } else {
+                            modelCard(option: option, logo: logoForBackend(option))
+                        }
                     }
                 }
             }
@@ -189,6 +607,7 @@ struct ModelsView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+        .id(FeatureTourTarget.experimentalModels.rawValue)
     }
 
     private var cohereLanguageSelection: Binding<CohereTranscribeLanguage> {
@@ -198,10 +617,20 @@ struct ModelsView: View {
         )
     }
 
-    private var indicASRLanguageSelection: Binding<IndicASRLanguage> {
+    @ViewBuilder
+    private func bodhanCard(selection: Binding<String>, isCore: Bool) -> some View {
+        let variants = BackendOption.bodhanFamily.filter { BodhanModel(rawValue: $0.model)?.isCore == isCore }
+        if let selected = variants.first(where: { $0.model == selection.wrappedValue }) ?? variants.first {
+            modelCard(option: selected, logo: "bodhan-logo",
+                         title: isCore ? "Bodhan Core" : "Bodhan Flex",
+                         precisionSelection: selection)
+        }
+    }
+
+    private func bodhanLanguageSelection(for model: String) -> Binding<BodhanLanguage> {
         Binding(
-            get: { appState.config.resolvedIndicASRLanguage },
-            set: { controller.selectIndicASRLanguage($0) }
+            get: { appState.config.resolvedBodhanLanguage.supported(for: model) },
+            set: { controller.selectBodhanLanguage($0) }
         )
     }
 
@@ -214,16 +643,44 @@ struct ModelsView: View {
         )
     }
 
+    private var whisperLanguageSelection: Binding<WhisperKitLanguage> {
+        Binding(
+            get: { appState.config.resolvedWhisperLanguage },
+            set: { controller.selectWhisperLanguage($0) }
+        )
+    }
+
+    private var parakeetLanguageSelection: Binding<ParakeetLanguage> {
+        Binding(
+            get: { appState.config.resolvedParakeetLanguage },
+            set: { controller.selectParakeetLanguage($0) }
+        )
+    }
+
+    private var qwen3AsrLanguageSelection: Binding<Qwen3AsrLanguage> {
+        Binding(
+            get: { appState.config.resolvedQwen3AsrLanguage },
+            set: { controller.selectQwen3AsrLanguage($0) }
+        )
+    }
+
+    private var appleSpeechLanguageSelection: Binding<String> {
+        Binding(
+            get: { appState.config.resolvedAppleSpeechLanguage },
+            set: { controller.selectAppleSpeechLanguage($0) }
+        )
+    }
+
     private var postProcessorSection: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
-                Text("POST-PROCESSING")
+                Text("CLEANUP")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .textCase(.uppercase)
                     .padding(.leading, 2)
 
-                Text("Optional LLM cleanup layer applied after transcription. Removes filler words, formats spoken lists, and corrects common dictation errors.")
+                Text("Optional cleanup after transcription. Use it to remove filler words, follow spoken corrections, format lists, and fix obvious dictation errors.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MuesliTheme.textSecondary)
                     .padding(.leading, 2)
@@ -231,22 +688,89 @@ struct ModelsView: View {
             .padding(.top, MuesliTheme.spacing8)
 
             VStack(spacing: MuesliTheme.spacing12) {
-                ForEach(PostProcessorOption.all) { option in
+                ForEach(Gemma4LiteRTModel.allCases) { model in
+                    gemmaCleanupModelCard(model)
+                }
+
+                ForEach(displayedPostProcessorOptions) { option in
                     postProcModelCard(option)
                 }
             }
         }
     }
 
-    private func postProcModelCard(_ option: PostProcessorOption) -> some View {
+    private var quillSection: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            Text("QUILL")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textTertiary)
+            Text("Rewrite selected text or generate text at the cursor with a local model. Download a model, choose Use for Quill, then enable Quill in Settings. These downloads are shared with cleanup.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+            ForEach(Gemma4LiteRTModel.allCases) { model in
+                gemmaCleanupModelCard(model, forQuill: true)
+            }
+            ForEach(displayedPostProcessorOptions.filter(\.supportsQuil)) { option in
+                postProcModelCard(option, forQuill: true)
+            }
+        }
+        .padding(.top, MuesliTheme.spacing8)
+    }
+
+    private func selectQuillModel(backend: TranscriptCleanupBackendOption, model: String) {
+        controller.updateConfig {
+            $0.quilBackend = backend.backend
+            $0.quilModel = model
+        }
+        if appState.config.enableQuilMode {
+            _ = controller.ensureQuilModelIsAvailable()
+        }
+    }
+
+    private func gemmaCleanupModelCard(_ model: Gemma4LiteRTModel, forQuill: Bool = false) -> some View {
+        let option = BackendOption.gemma4LiteRT(model)
+        let isDownloaded = downloadedModels.contains(option.model)
+        let isCompatible = forQuill || TranscriptCleanupBackendOption.gemma4LiteRT
+            .isCompatible(with: appState.selectedBackend)
+
+        return modelCard(
+            option: option,
+            logo: "google-logo",
+            isActive: isDownloaded
+                && (forQuill
+                    ? appState.config.quilBackend == TranscriptCleanupBackendOption.gemma4LiteRT.backend && appState.config.quilModel == model.repoID
+                    : appState.selectedPostProcessorBackend == .gemma4LiteRT && appState.config.postProcessorGemmaModel == model.repoID),
+            onSetActive: {
+                if forQuill {
+                    selectQuillModel(backend: .gemma4LiteRT, model: model.repoID)
+                } else {
+                    controller.selectGemma4PostProcessor(model)
+                }
+            },
+            description: forQuill
+                ? "An experimental local model for rewriting and generating text with Quill. Shares its download with dictation and cleanup."
+                : "An experimental local option for filler removal, formatting, and obvious transcript errors. It shares the \(model.label) download with dictation and Quill.",
+            activeLabel: forQuill ? "Quill Selected" : "Cleanup Active",
+            downloadedLabel: isCompatible ? "Downloaded" : "Used for Dictation",
+            actionTitle: forQuill ? "Use for Quill" : "Use for Cleanup",
+            activationDisabledReason: isCompatible
+                ? nil
+                : "Unavailable while Gemma 4 is selected for dictation. Choose another dictation model first."
+        )
+    }
+
+    private func postProcModelCard(_ option: PostProcessorOption, forQuill: Bool = false) -> some View {
         let isDownloaded = downloadedPostProcModels.contains(option.id)
-        let isActive = appState.activePostProcessor.id == option.id && isDownloaded
+        let isActive = isDownloaded && (forQuill
+            ? appState.config.quilBackend == TranscriptCleanupBackendOption.local.backend && appState.config.quilModel == option.id
+            : appState.activePostProcessor.id == option.id)
         let isDownloading = downloadingPostProcModels.contains(option.id)
         let progress = downloadProgressPostProc[option.id] ?? 0
+        let showsDownloadStatus = shouldShowDownloadStatus(for: option.id, isDownloading: isDownloading)
 
         return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
-                brandLogo("qwen-logo")
+                brandLogo(option.logoResourceName)
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     HStack(spacing: MuesliTheme.spacing8) {
                         Text(option.label)
@@ -258,7 +782,7 @@ struct ModelsView: View {
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
 
-                    Text(option.description)
+                    Text(forQuill ? "A local model for rewriting selected text and generating text at the cursor. Shares its download with cleanup." : option.description)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
@@ -266,7 +790,7 @@ struct ModelsView: View {
                 Spacer()
 
                 if isActive {
-                    Text("Active")
+                    Text(forQuill ? "Quill Selected" : "Active")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.success)
                         .padding(.horizontal, 8)
@@ -284,19 +808,18 @@ struct ModelsView: View {
                 }
             }
 
-            if isDownloading {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: progress)
-                        .tint(MuesliTheme.accent)
-                    Text("\(Int(progress * 100))% downloading...")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
+            if showsDownloadStatus {
+                downloadProgressView(
+                    for: option.id,
+                    fallbackProgress: progress,
+                    fallbackMessage: downloadMessages[option.id],
+                    isDownloading: isDownloading
+                )
             }
 
             HStack(spacing: MuesliTheme.spacing8) {
                 if isDownloading {
-                    Button("Cancel") {
+                    Button("Pause") {
                         cancelPostProcDownload(option)
                     }
                     .buttonStyle(.plain)
@@ -308,8 +831,12 @@ struct ModelsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
                 } else if isDownloaded {
                     if !isActive {
-                        Button("Set Active") {
-                            controller.selectPostProcessor(option)
+                        Button(forQuill ? "Use for Quill" : "Set Active") {
+                            if forQuill {
+                                selectQuillModel(backend: .local, model: option.id)
+                            } else {
+                                controller.selectPostProcessor(option)
+                            }
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 12, weight: .medium))
@@ -329,9 +856,9 @@ struct ModelsView: View {
                             .frame(width: 20, height: 20)
                     }
                     .buttonStyle(.plain)
-                } else {
+                } else if option.isDownloadable {
                     Button("Download") {
-                        startPostProcDownload(option)
+                        startPostProcDownload(option, forQuill: forQuill)
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
@@ -340,6 +867,10 @@ struct ModelsView: View {
                     .padding(.vertical, 4)
                     .background(MuesliTheme.accentSubtle)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                } else {
+                    Text("No longer available")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
                 }
             }
         }
@@ -365,6 +896,8 @@ struct ModelsView: View {
         let isDownloaded = downloadedModels.contains(selectedOption.model)
         let isDownloading = downloadingModels.contains(selectedOption.model)
         let progress = downloadProgress[selectedOption.model] ?? 0
+        let showsDownloadStatus = shouldShowDownloadStatus(for: selectedOption.model, isDownloading: isDownloading)
+        let incompatibilityReason = selectedOption.incompatibilityReason()
 
         return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
@@ -408,6 +941,7 @@ struct ModelsView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: 220, alignment: .leading)
+                .disabled(incompatibilityReason != nil)
 
                 Text(selectedOption.sizeLabel)
                     .font(MuesliTheme.caption())
@@ -416,19 +950,72 @@ struct ModelsView: View {
 
             Text(selectedOption.description)
                 .font(MuesliTheme.caption())
-                .foregroundStyle(MuesliTheme.textSecondary)
+                .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.textSecondary : MuesliTheme.textTertiary)
 
-            if isDownloading {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: progress)
-                        .tint(MuesliTheme.accent)
-                    Text("\(Int(progress * 100))% downloading...")
-                        .font(.system(size: 11))
+            if selectedOption.supportsWhisperLanguageSelection {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: whisperLanguageSelection) {
+                        ForEach(WhisperKitLanguage.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
                 }
             }
 
-            actionButtons(for: selectedOption, isActive: isActive, isDownloaded: isDownloaded, isDownloading: isDownloading)
+            if selectedOption.backend == BackendOption.parakeetMultilingual.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: parakeetLanguageSelection) {
+                        ForEach(ParakeetLanguage.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
+                }
+
+                Text("Script filter: keeps the chosen language's writing script in the transcript. Parakeet v3 only — v2 ignores this setting.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
+            if showsDownloadStatus, incompatibilityReason == nil {
+                downloadProgressView(
+                    for: selectedOption.model,
+                    fallbackProgress: progress,
+                    fallbackMessage: downloadMessages[selectedOption.model],
+                    isDownloading: isDownloading
+                )
+            }
+
+            if let incompatibilityReason {
+                Label(incompatibilityReason, systemImage: "exclamationmark.triangle")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
+            actionButtons(
+                for: selectedOption,
+                isActive: isActive,
+                isDownloaded: isDownloaded,
+                isDownloading: isDownloading,
+                incompatibilityReason: incompatibilityReason
+            )
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
@@ -461,8 +1048,119 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
+    private func downloadProgressView(
+        for modelID: String,
+        fallbackProgress: Double,
+        fallbackMessage: String? = nil,
+        isDownloading: Bool = true
+    ) -> some View {
+        if let snapshot = downloadSnapshots[modelID] {
+            VStack(alignment: .leading, spacing: 4) {
+                if snapshot.phase != .preparing {
+                    ProgressView(value: snapshot.fractionCompleted ?? fallbackProgress)
+                        .tint(MuesliTheme.accent)
+                }
+
+                if let currentFile = snapshot.currentFile?.split(separator: "/").last.map(String.init), !currentFile.isEmpty {
+                    Text("\(downloadPhaseLabel(snapshot.phase)): \(currentFile)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                } else {
+                    Text(snapshot.message ?? downloadPhaseLabel(snapshot.phase))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                }
+
+                if let detail = downloadDetailText(snapshot), !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                // Only show a moving bar while a download is actually in flight — a failure with
+                // no snapshot (e.g. an instant OS-compatibility rejection) can leave a stale
+                // message behind with nothing in progress to animate.
+                if isDownloading {
+                    ProgressView(value: fallbackProgress)
+                        .tint(MuesliTheme.accent)
+                }
+                Text(fallbackMessage ?? "\(Int(fallbackProgress * 100))% downloading...")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+        }
+    }
+
+    private func downloadPhaseLabel(_ phase: ModelDownloadPhase) -> String {
+        switch phase {
+        case .downloading: return "Downloading"
+        case .preparing: return "Preparing"
+        case .ready: return "Ready"
+        case .paused: return "Download paused"
+        case .failed: return "Failed"
+        }
+    }
+
+    private func downloadDetailText(_ snapshot: ModelDownloadProgress) -> String? {
+        var details: [String] = []
+        if snapshot.totalFileCount > 0 {
+            let completed = min(max(snapshot.completedFileCount, 0), snapshot.totalFileCount)
+            let remaining = snapshot.totalFileCount - completed
+            details.append("\(completed) of \(snapshot.totalFileCount) \(downloadFileNoun(snapshot.totalFileCount))")
+            if remaining > 0 {
+                details.append("\(remaining) \(downloadFileNoun(remaining)) left")
+            }
+        }
+        if let total = snapshot.totalBytes, total > 0 {
+            details.append("\(ModelDownloadDisplayFormatting.bytes(snapshot.completedBytes)) / \(ModelDownloadDisplayFormatting.bytes(total))")
+            if snapshot.completedBytes < total {
+                details.append("\(ModelDownloadDisplayFormatting.bytes(total - snapshot.completedBytes)) left")
+            }
+        } else if let currentTotal = snapshot.currentFileTotalBytes, currentTotal > 0 {
+            details.append("\(ModelDownloadDisplayFormatting.bytes(snapshot.currentFileCompletedBytes)) / \(ModelDownloadDisplayFormatting.bytes(currentTotal))")
+            if snapshot.currentFileCompletedBytes < currentTotal {
+                details.append("\(ModelDownloadDisplayFormatting.bytes(currentTotal - snapshot.currentFileCompletedBytes)) left in file")
+            }
+        }
+        if snapshot.phase == .downloading {
+            if snapshot.bytesPerSecond > 0 {
+                details.append("\(ModelDownloadDisplayFormatting.rate(snapshot.bytesPerSecond))")
+            }
+            if let eta = snapshot.estimatedSecondsRemaining,
+               let formattedETA = ModelDownloadDisplayFormatting.eta(eta) {
+                details.append("\(formattedETA) left")
+            }
+            if snapshot.retryCount > 0 {
+                details.append("retry \(snapshot.retryCount)/3")
+            }
+        } else if let message = snapshot.message, !message.isEmpty {
+            details.append(message)
+        }
+        return details.isEmpty ? nil : details.joined(separator: " · ")
+    }
+
+    private func downloadFileNoun(_ count: Int) -> String {
+        count == 1 ? "file" : "files"
+    }
+
+    private func shouldShowDownloadStatus(for modelID: String, isDownloading: Bool) -> Bool {
+        guard let phase = downloadSnapshots[modelID]?.phase else {
+            return isDownloading || downloadMessages[modelID] != nil
+        }
+        return isDownloading || phase == .paused || phase == .failed
+    }
+
+    @ViewBuilder
     private func brandLogo(_ name: String?) -> some View {
-        if let name,
+        if name == "apple-system-logo" {
+            Image(systemName: "apple.logo")
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .frame(width: 24, height: 24)
+                .padding(.top, 2)
+        } else if let name,
            let url = Bundle.main.url(forResource: name, withExtension: "png")
                 ?? Bundle.main.url(forResource: name, withExtension: "svg"),
            let nsImage = NSImage(contentsOf: url) {
@@ -478,22 +1176,33 @@ struct ModelsView: View {
     private func logoForBackend(_ option: BackendOption) -> String? {
         switch option.backend {
         case "fluidaudio": return "nvidia-logo"
+        case "parakeet-unified": return "nvidia-logo"
         case "whisper": return "openai-logo"
         case "cohere": return "cohere-logo"
         case "qwen": return "qwen-logo"
         case "nemotron35": return "nvidia-logo"
-        case "indicasr": return "ai4bharat-logo"
+        case "bodhan": return "bodhan-logo"
         case "sensevoice": return "qwen-logo"
         case "gemma4-litert": return "google-logo"
+        case "apple-speech": return "apple-system-logo"
         default: return nil
         }
     }
 
     @ViewBuilder
-    private func actionButtons(for option: BackendOption, isActive: Bool, isDownloaded: Bool, isDownloading: Bool) -> some View {
+    private func actionButtons(
+        for option: BackendOption,
+        isActive: Bool,
+        isDownloaded: Bool,
+        isDownloading: Bool,
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil,
+        incompatibilityReason: String? = nil,
+        onSetActive: (() -> Void)? = nil
+    ) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
             if isDownloading {
-                Button("Cancel") {
+                Button("Pause") {
                     cancelDownload(option)
                 }
                 .buttonStyle(.plain)
@@ -505,56 +1214,82 @@ struct ModelsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
             } else if isDownloaded {
                 if !isActive {
-                    Button("Set Active") {
-                        controller.selectBackend(option)
+                    let disabledReason = incompatibilityReason ?? activationDisabledReason
+                    Button(actionTitle) {
+                        if let onSetActive {
+                            onSetActive()
+                        } else {
+                            controller.selectBackend(option)
+                        }
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MuesliTheme.accent)
+                    .foregroundStyle(disabledReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
                     .padding(.horizontal, MuesliTheme.spacing12)
                     .padding(.vertical, 4)
-                    .background(MuesliTheme.accentSubtle)
+                    .background(disabledReason == nil ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
                     .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .disabled(disabledReason != nil)
+                    .help(disabledReason ?? actionTitle)
                 }
 
-                Button {
-                    modelToDelete = option
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.red.opacity(0.6))
-                        .frame(width: 20, height: 20)
+                if !option.isSystemManaged {
+                    Button {
+                        modelToDelete = option
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red.opacity(0.6))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!controller.canModifyModelFiles)
                 }
-                .buttonStyle(.plain)
             } else {
                 Button("Download") {
                     startDownload(option)
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(MuesliTheme.accent)
+                .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
                 .padding(.horizontal, MuesliTheme.spacing12)
                 .padding(.vertical, 4)
-                .background(MuesliTheme.accentSubtle)
+                .background(incompatibilityReason == nil ? MuesliTheme.accentSubtle : MuesliTheme.surfacePrimary)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .disabled(incompatibilityReason != nil)
+                .help(incompatibilityReason ?? "Download")
             }
         }
     }
 
-    private func modelCard(option: BackendOption, logo: String? = nil) -> some View {
-        let isActive = appState.selectedBackend == option
+    private func modelCard(
+        option: BackendOption,
+        logo: String? = nil,
+        title: String? = nil,
+        precisionSelection: Binding<String>? = nil,
+        isActive activeOverride: Bool? = nil,
+        onSetActive: (() -> Void)? = nil,
+        description: String? = nil,
+        activeLabel: String = "Active",
+        downloadedLabel: String = "Downloaded",
+        actionTitle: String = "Set Active",
+        activationDisabledReason: String? = nil
+    ) -> some View {
+        let isActive = activeOverride ?? (appState.selectedBackend == option)
         let isDownloaded = downloadedModels.contains(option.model)
         let isDownloading = downloadingModels.contains(option.model)
         let progress = downloadProgress[option.model] ?? 0
+        let showsDownloadStatus = shouldShowDownloadStatus(for: option.model, isDownloading: isDownloading)
+        let incompatibilityReason = option.incompatibilityReason()
 
         return VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
             HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
                 brandLogo(logo)
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
                     HStack(spacing: MuesliTheme.spacing8) {
-                        Text(option.label)
+                        Text(title ?? option.label)
                             .font(MuesliTheme.headline())
-                            .foregroundStyle(MuesliTheme.textPrimary)
+                            .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.textPrimary : MuesliTheme.textTertiary)
 
                         if option.recommended {
                             Text("Recommended")
@@ -571,16 +1306,25 @@ struct ModelsView: View {
                             .foregroundStyle(MuesliTheme.textTertiary)
                     }
 
-                    Text(option.description)
+                    Text(description ?? option.description)
                         .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.textSecondary : MuesliTheme.textTertiary)
                 }
 
                 Spacer()
 
-                // Status badge
-                if isActive {
-                    Text("Active")
+                // Status badge — Incompatible takes priority over Active/Downloaded.
+                if let incompatibilityReason {
+                    Text("Incompatible")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(MuesliTheme.surfacePrimary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .help(incompatibilityReason)
+                } else if isActive {
+                    Text(activeLabel)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MuesliTheme.success)
                         .padding(.horizontal, 8)
@@ -588,7 +1332,7 @@ struct ModelsView: View {
                         .background(MuesliTheme.success.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 } else if isDownloaded {
-                    Text("Downloaded")
+                    Text(downloadedLabel)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .padding(.horizontal, 8)
@@ -613,18 +1357,112 @@ struct ModelsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
                 }
             }
 
-            if option.backend == BackendOption.indicASR.backend {
+            if option.backend == BackendOption.bodhanFlex.backend {
                 HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
                     Text("Language")
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .frame(width: 64, alignment: .leading)
 
-                    Picker("", selection: indicASRLanguageSelection) {
-                        ForEach(IndicASRLanguage.allCases, id: \.self) { language in
+                    Picker("", selection: bodhanLanguageSelection(for: option.model)) {
+                        ForEach(BodhanLanguage.choices(for: option.model), id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
+
+                    if let precisionSelection {
+                        Text("Precision")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                        Picker("Precision", selection: precisionSelection) {
+                            ForEach(BackendOption.bodhanFamily.filter {
+                                BodhanModel(rawValue: $0.model)?.isCore == BodhanModel(rawValue: option.model)?.isCore
+                            }, id: \.model) { variant in
+                                Text(BodhanModel(rawValue: variant.model)?.isInt8 == true ? "INT8" : "FP16")
+                                    .tag(variant.model)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 100)
+                        .disabled(isDownloading || incompatibilityReason != nil)
+                    }
+                }
+                if BodhanModel(rawValue: option.model)?.isCore == false {
+                    HStack(spacing: MuesliTheme.spacing12) {
+                        Text("Output").font(MuesliTheme.caption()).foregroundStyle(MuesliTheme.textTertiary)
+                            .frame(width: 64, alignment: .leading)
+                        Picker("Output script", selection: Binding(
+                            get: { appState.config.resolvedBodhanOutputMode },
+                            set: { controller.selectBodhanOutputMode($0) }
+                        )) {
+                            ForEach(BodhanOutputMode.allCases, id: \.self) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .labelsHidden().pickerStyle(.menu).frame(maxWidth: 220, alignment: .leading)
+                        .disabled(incompatibilityReason != nil)
+                        .help("Native script, mixed Indic and English scripts, or all Latin letters.")
+                    }
+                }
+
+            }
+
+            if option.backend == BackendOption.qwen3Asr.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: qwen3AsrLanguageSelection) {
+                        ForEach(Qwen3AsrLanguage.allCases, id: \.self) { language in
+                            Text(language.label).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
+                }
+            }
+
+            if option.backend == BackendOption.appleSpeechAnalyzer.backend {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: appleSpeechLanguageSelection) {
+                        ForEach(appleSpeechLanguageOptions) { language in
+                            Text(language.label).tag(language.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
+                }
+            }
+
+            if option.supportsWhisperLanguageSelection {
+                HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                    Text("Language")
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: 64, alignment: .leading)
+
+                    Picker("", selection: whisperLanguageSelection) {
+                        ForEach(WhisperKitLanguage.allCases, id: \.self) { language in
                             Text(language.label).tag(language)
                         }
                     }
@@ -649,6 +1487,7 @@ struct ModelsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(maxWidth: 220, alignment: .leading)
+                    .disabled(incompatibilityReason != nil)
                 }
 
                 if isDownloaded && nemotron35UpdateAvailable && !isDownloading {
@@ -662,23 +1501,43 @@ struct ModelsView: View {
                         Button("Update") { updateNemotron35(option) }
                             .buttonStyle(.plain)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(MuesliTheme.accent)
+                            .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                            .disabled(incompatibilityReason != nil || !controller.canModifyModelFiles)
+                            .help(incompatibilityReason ?? "Update")
                     }
                 }
             }
 
-            // Progress bar when downloading
-            if isDownloading {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: progress)
-                        .tint(MuesliTheme.accent)
-                    Text("\(Int(progress * 100))% downloading...")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
+            // Progress bar when downloading.
+            if showsDownloadStatus, incompatibilityReason == nil {
+                downloadProgressView(
+                    for: option.model,
+                    fallbackProgress: progress,
+                    fallbackMessage: downloadMessages[option.model],
+                    isDownloading: isDownloading
+                )
             }
 
-            actionButtons(for: option, isActive: isActive, isDownloaded: isDownloaded, isDownloading: isDownloading)
+            if let incompatibilityReason {
+                Label(incompatibilityReason, systemImage: "exclamationmark.triangle")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            } else if let activationDisabledReason, isDownloaded, !isActive {
+                Label(activationDisabledReason, systemImage: "exclamationmark.lock")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+
+            actionButtons(
+                for: option,
+                isActive: isActive,
+                isDownloaded: isDownloaded,
+                isDownloading: isDownloading,
+                actionTitle: actionTitle,
+                activationDisabledReason: activationDisabledReason,
+                incompatibilityReason: incompatibilityReason,
+                onSetActive: onSetActive
+            )
         }
         .padding(MuesliTheme.spacing16)
         .background(MuesliTheme.backgroundRaised)
@@ -698,7 +1557,7 @@ struct ModelsView: View {
                             .font(MuesliTheme.headline())
                             .foregroundStyle(MuesliTheme.textTertiary)
 
-                        Text("Experimental")
+                        Text("Coming soon")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(MuesliTheme.textTertiary)
                             .padding(.horizontal, 6)
@@ -730,38 +1589,63 @@ struct ModelsView: View {
 
     // MARK: - Post-Processor Actions
 
-    private func startPostProcDownload(_ option: PostProcessorOption) {
+    private func startPostProcDownload(_ option: PostProcessorOption, forQuill: Bool = false) {
+        guard option.isDownloadable else { return }
         withAnimation { _ = downloadingPostProcModels.insert(option.id) }
         downloadProgressPostProc[option.id] = 0.02
+        downloadMessages.removeValue(forKey: option.id)
+        downloadSnapshots.removeValue(forKey: option.id)
+        let generation = UUID()
+        downloadGenerations[option.id] = generation
 
         let task = Task {
             let fm = FileManager.default
             do {
                 try fm.createDirectory(at: option.cacheDirectory, withIntermediateDirectories: true)
 
-                try await downloadPostProcModel(option)
+                try await downloadPostProcModel(option, generation: generation)
+                try Task.checkCancellation()
 
                 await MainActor.run {
+                    guard downloadGenerations[option.id] == generation, !Task.isCancelled else { return }
                     withAnimation {
                         downloadingPostProcModels.remove(option.id)
                         downloadedPostProcModels.insert(option.id)
                         downloadProgressPostProc.removeValue(forKey: option.id)
+                        downloadMessages.removeValue(forKey: option.id)
+                        downloadSnapshots.removeValue(forKey: option.id)
+                        if downloadGenerations[option.id] == generation {
+                            downloadGenerations.removeValue(forKey: option.id)
+                        }
                         downloadTasksPostProc.removeValue(forKey: option.id)
                     }
-                    if appState.config.enablePostProcessor && !appState.activePostProcessor.isDownloaded {
+                    if !forQuill && appState.config.enablePostProcessor && !appState.activePostProcessor.isDownloaded {
                         controller.selectPostProcessor(option)
                         controller.preloadExperimentalTranscriptionFeatures()
                     }
                 }
             } catch {
+                let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
                 await MainActor.run {
+                    guard downloadGenerations[option.id] == generation else { return }
                     withAnimation {
                         downloadingPostProcModels.remove(option.id)
                         downloadProgressPostProc.removeValue(forKey: option.id)
+                        downloadMessages[option.id] = isCancelled
+                            ? "Paused — select Download to resume"
+                            : error.localizedDescription
+                        if let snapshot = downloadSnapshots[option.id] {
+                            downloadSnapshots[option.id] = snapshot.replacing(
+                                phase: isCancelled ? .paused : .failed,
+                                message: downloadMessages[option.id]
+                            )
+                        }
+                        if downloadGenerations[option.id] == generation {
+                            downloadGenerations.removeValue(forKey: option.id)
+                        }
                         downloadTasksPostProc.removeValue(forKey: option.id)
                     }
                 }
-                let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
                 if !isCancelled {
                     fputs("[muesli-native] Post-processor download failed: \(error)\n", stderr)
                 }
@@ -770,94 +1654,76 @@ struct ModelsView: View {
         downloadTasksPostProc[option.id] = task
     }
 
-    private func downloadPostProcModel(_ option: PostProcessorOption, maxRetries: Int = 3) async throws {
-        var lastError: Error?
-        for attempt in 0..<maxRetries {
-            try Task.checkCancellation()
-            if attempt > 0 {
-                let delay = UInt64(pow(2.0, Double(attempt - 1))) * 1_000_000_000
-                try await Task.sleep(nanoseconds: delay)
-                fputs("[download] retry \(attempt)/\(maxRetries) for \(option.filename)\n", stderr)
-                await MainActor.run {
-                    downloadProgressPostProc[option.id] = 0.02
-                }
-            }
-            do {
-                let tmpURL = try await downloadPostProcTempFile(option)
-                try installPostProcModel(from: tmpURL, option: option)
-                return
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                lastError = error
-            }
-        }
-        let underlying = lastError ?? NSError(domain: "PostProcDownload", code: 0, userInfo: [
-            NSLocalizedDescriptionKey: "No download attempts were made",
-        ])
-        throw DownloadError.retriesExhausted(option.filename, underlying)
-    }
-
-    private func downloadPostProcTempFile(_ option: PostProcessorOption) async throws -> URL {
-        let delegate = PostProcDownloadDelegate { progress in
+    private func downloadPostProcModel(_ option: PostProcessorOption, generation: UUID) async throws {
+        let manifest = ModelDownloadManifest(
+            id: option.id,
+            version: "main",
+            files: [ModelDownloadFile(relativePath: option.filename, remoteURL: option.downloadURL)],
+            maximumConcurrency: 1
+        )
+        try await ModelDownloadCoordinator.shared.download(manifest, to: option.cacheDirectory) { snapshot in
             DispatchQueue.main.async {
-                downloadProgressPostProc[option.id] = max(progress, 0.02)
+                guard downloadGenerations[option.id] == generation else { return }
+                downloadProgressPostProc[option.id] = max(snapshot.fractionCompleted ?? 0.02, 0.02)
+                downloadSnapshots[option.id] = snapshot
             }
         }
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        let invalidator = URLSessionInvalidator()
+        try Task.checkCancellation()
         do {
-            let downloadedURL = try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { continuation in
-                    delegate.setContinuation(continuation)
-                    session.downloadTask(with: option.downloadURL).resume()
-                }
-            } onCancel: {
-                invalidator.cancel(session)
-            }
-            invalidator.finish(session)
-            return downloadedURL
+            try validateGGUFHeader(at: option.modelURL)
         } catch {
-            if error is CancellationError {
-                invalidator.cancel(session)
-            } else {
-                invalidator.finish(session)
-            }
+            try? FileManager.default.removeItem(at: option.modelURL)
             throw error
         }
     }
 
-    private func installPostProcModel(from tmpURL: URL, option: PostProcessorOption) throws {
-        let fm = FileManager.default
-        let stagingURL = option.cacheDirectory.appendingPathComponent(".\(option.filename).download")
-        defer {
-            try? fm.removeItem(at: tmpURL)
-            try? fm.removeItem(at: stagingURL)
-        }
-        try? fm.removeItem(at: stagingURL)
-        try fm.moveItem(at: tmpURL, to: stagingURL)
-        if fm.fileExists(atPath: option.modelURL.path) {
-            _ = try fm.replaceItemAt(
-                option.modelURL,
-                withItemAt: stagingURL,
-                backupItemName: nil,
-                options: []
-            )
-        } else {
-            try fm.moveItem(at: stagingURL, to: option.modelURL)
+    private func validateGGUFHeader(at url: URL) throws {
+        let fh = try FileHandle(forReadingFrom: url)
+        defer { try? fh.close() }
+        let header = try fh.read(upToCount: 4) ?? Data()
+        guard header == Data([0x47, 0x47, 0x55, 0x46]) else {
+            throw NSError(domain: "PostProcDownload", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Downloaded post-processor file is not a GGUF model",
+            ])
         }
     }
 
     private func cancelPostProcDownload(_ option: PostProcessorOption) {
-        downloadTasksPostProc[option.id]?.cancel()
+        let task = downloadTasksPostProc[option.id]
+        let cancellationGeneration = UUID()
+        task?.cancel()
+        Task {
+            await ModelDownloadCoordinator.shared.cancel(modelID: option.id)
+            _ = await task?.value
+            await MainActor.run {
+                guard downloadGenerations[option.id] == cancellationGeneration else { return }
+                if option.isDownloaded {
+                    downloadedPostProcModels.insert(option.id)
+                    downloadMessages.removeValue(forKey: option.id)
+                    downloadSnapshots.removeValue(forKey: option.id)
+                } else {
+                    downloadMessages[option.id] = "Paused — select Download to resume"
+                }
+                downloadGenerations.removeValue(forKey: option.id)
+            }
+        }
         withAnimation {
             downloadingPostProcModels.remove(option.id)
             downloadProgressPostProc.removeValue(forKey: option.id)
+            // Invalidate callbacks from the cancelled task, but retain a
+            // generation until it has fully unwound so a race that finalizes
+            // the file can refresh the card immediately.
+            downloadGenerations[option.id] = cancellationGeneration
+            if let snapshot = downloadSnapshots[option.id] {
+                downloadSnapshots[option.id] = snapshot.replacing(phase: .paused, message: "Paused — select Download to resume")
+            }
             downloadTasksPostProc.removeValue(forKey: option.id)
         }
     }
 
     private func deletePostProcModel(_ option: PostProcessorOption) {
+        guard let mutation = controller.beginModelFileMutation() else { return }
+        defer { controller.endModelFileMutation(mutation) }
         if appState.activePostProcessor.id == option.id {
             let remainingDownloadedIDs = downloadedPostProcModels.subtracting([option.id])
             if let fallback = PostProcessorOption.firstDownloaded(excluding: option.id, downloadedIDs: remainingDownloadedIDs) {
@@ -868,33 +1734,81 @@ struct ModelsView: View {
         }
         try? FileManager.default.removeItem(at: option.cacheDirectory)
         downloadedPostProcModels.remove(option.id)
+        downloadSnapshots.removeValue(forKey: option.id)
+        downloadGenerations.removeValue(forKey: option.id)
     }
 
     private func checkDownloadedPostProcModels() {
         downloadedPostProcModels.removeAll()
-        for option in PostProcessorOption.all {
+        for option in PostProcessorOption.downloaded {
             if option.isDownloaded {
                 downloadedPostProcModels.insert(option.id)
             }
         }
     }
 
+    /// The retired v2 cleanup model stays visible only for people who already
+    /// have it installed. Deleting it removes the card, and the model cannot
+    /// be downloaded again.
+    private var displayedPostProcessorOptions: [PostProcessorOption] {
+        PostProcessorOption.all
+            + (downloadedPostProcModels.contains(PostProcessorOption.legacyV2.id)
+                ? [.legacyV2]
+                : [])
+    }
+
     // MARK: - Actions
 
     private func startDownload(_ option: BackendOption) {
+        guard option.isCompatible() else { return }
         withAnimation { _ = downloadingModels.insert(option.model) }
         downloadProgress[option.model] = 0.05  // Show initial progress immediately
+        downloadMessages.removeValue(forKey: option.model)
+        downloadSnapshots.removeValue(forKey: option.model)
+        let generation = UUID()
+        downloadGenerations[option.model] = generation
 
         let startTime = Date()
         let task = Task {
             do {
                 try await controller.transcriptionCoordinator.preloadRequired(
                     backend: option,
-                    includeMeetingHelpers: controller.config.resolvedOnboardingUseCase.includesMeetings
-                ) { progress, _ in
+                    includeMeetingHelpers: false,
+                    meetingHelperTrigger: .modelLibrary,
+                    appleSpeechLanguage: appState.config.resolvedAppleSpeechLanguage
+                ) { progress, message in
                     DispatchQueue.main.async {
+                        guard downloadGenerations[option.model] == generation else { return }
                         downloadProgress[option.model] = max(progress, 0.05)
+                        if let message { downloadMessages[option.model] = message }
                     }
+                } progressSnapshot: { snapshot in
+                    DispatchQueue.main.async {
+                        guard downloadGenerations[option.model] == generation else { return }
+                        downloadSnapshots[option.model] = snapshot
+                        if let fraction = snapshot.fractionCompleted {
+                            downloadProgress[option.model] = max(fraction, 0.05)
+                        }
+                    }
+                }
+                guard !Task.isCancelled else {
+                    await MainActor.run {
+                        guard downloadGenerations[option.model] == generation else { return }
+                        withAnimation {
+                            downloadingModels.remove(option.model)
+                            downloadProgress.removeValue(forKey: option.model)
+                            downloadMessages[option.model] = "Paused — select Download to resume"
+                            if let snapshot = downloadSnapshots[option.model] {
+                                downloadSnapshots[option.model] = snapshot.replacing(
+                                    phase: .paused,
+                                    message: "Paused — select Download to resume"
+                                )
+                            }
+                            downloadGenerations.removeValue(forKey: option.model)
+                            downloadTasks.removeValue(forKey: option.model)
+                        }
+                    }
+                    return
                 }
                 guard isModelDownloaded(option, fm: FileManager.default) else {
                     throw NSError(
@@ -905,9 +1819,18 @@ struct ModelsView: View {
                 }
                 guard !Task.isCancelled else {
                     await MainActor.run {
+                        guard downloadGenerations[option.model] == generation else { return }
                         withAnimation {
                             downloadingModels.remove(option.model)
                             downloadProgress.removeValue(forKey: option.model)
+                            downloadMessages[option.model] = "Paused — select Download to resume"
+                            if let snapshot = downloadSnapshots[option.model] {
+                                downloadSnapshots[option.model] = snapshot.replacing(
+                                    phase: .paused,
+                                    message: "Paused — select Download to resume"
+                                )
+                            }
+                            downloadGenerations.removeValue(forKey: option.model)
                             downloadTasks.removeValue(forKey: option.model)
                         }
                     }
@@ -919,22 +1842,45 @@ struct ModelsView: View {
                     try? await Task.sleep(nanoseconds: UInt64((1.5 - elapsed) * 1_000_000_000))
                 }
                 await MainActor.run {
+                    guard downloadGenerations[option.model] == generation, !Task.isCancelled else { return }
                     withAnimation {
                         downloadingModels.remove(option.model)
                         downloadedModels.insert(option.model)
                         downloadProgress.removeValue(forKey: option.model)
+                        downloadMessages.removeValue(forKey: option.model)
+                        downloadSnapshots.removeValue(forKey: option.model)
+                        downloadGenerations.removeValue(forKey: option.model)
                         downloadTasks.removeValue(forKey: option.model)
                     }
                 }
             } catch {
+                let isCancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
                 await MainActor.run {
                     withAnimation {
+                        guard downloadGenerations[option.model] == generation else { return }
                         downloadingModels.remove(option.model)
                         downloadProgress.removeValue(forKey: option.model)
+                        if isCancelled {
+                            if let snapshot = downloadSnapshots[option.model] {
+                                downloadSnapshots[option.model] = snapshot.replacing(
+                                    phase: .paused,
+                                    message: "Paused — select Download to resume"
+                                )
+                            }
+                        } else {
+                            downloadMessages[option.model] = error.localizedDescription
+                            if let snapshot = downloadSnapshots[option.model] {
+                                downloadSnapshots[option.model] = snapshot.replacing(
+                                    phase: .failed,
+                                    message: error.localizedDescription
+                                )
+                            }
+                        }
+                        downloadGenerations.removeValue(forKey: option.model)
                         downloadTasks.removeValue(forKey: option.model)
                     }
                 }
-                if !(error is CancellationError) {
+                if !isCancelled {
                     fputs("[muesli-native] model download failed for \(option.backend)/\(option.model): \(error)\n", stderr)
                 }
             }
@@ -942,19 +1888,69 @@ struct ModelsView: View {
         downloadTasks[option.model] = task
     }
 
+    private func loadAppleSpeechLanguageOptions() {
+        guard #available(macOS 26.0, *), AppleSpeechAnalyzerTranscriber.isSupportedOnCurrentSystem else {
+            appleSpeechLanguageOptions = [.system]
+            return
+        }
+
+        Task {
+            var options = await AppleSpeechLanguageOption.supportedOptions()
+            let selectedIdentifier = appState.config.resolvedAppleSpeechLanguage
+            if selectedIdentifier != AppleSpeechLanguageOption.systemIdentifier,
+               !options.contains(where: { $0.id == selectedIdentifier }) {
+                options.append(.locale(Locale(identifier: selectedIdentifier)))
+            }
+            appleSpeechLanguageOptions = options
+        }
+    }
+
     private func cancelDownload(_ option: BackendOption) {
-        downloadTasks[option.model]?.cancel()
+        let modelID = option.model
+        let task = downloadTasks[modelID]
+        let cancellationGeneration = UUID()
+        task?.cancel()
         withAnimation {
-            downloadingModels.remove(option.model)
-            downloadProgress.removeValue(forKey: option.model)
-            downloadTasks.removeValue(forKey: option.model)
+            downloadingModels.remove(modelID)
+            downloadProgress.removeValue(forKey: modelID)
+            downloadMessages[modelID] = "Paused — select Download to resume"
+            // Keep a cancellation generation until the caller task has fully
+            // unwound. If a replacement starts first, this generation changes
+            // and the old cancellation must not stop the replacement transfer.
+            downloadGenerations[modelID] = cancellationGeneration
+            downloadTasks.removeValue(forKey: modelID)
+            if let snapshot = downloadSnapshots[modelID] {
+                downloadSnapshots[modelID] = snapshot.replacing(
+                    phase: .paused,
+                    message: "Paused — select Download to resume"
+                )
+            }
+        }
+        Task {
+            let shouldCancel = await MainActor.run {
+                downloadGenerations[modelID] == cancellationGeneration
+            }
+            guard shouldCancel else { return }
+
+            await ManagedASRModelDownloader.cancel(modelID: modelID)
+            _ = await task?.value
+
+            await MainActor.run {
+                guard downloadGenerations[modelID] == cancellationGeneration else { return }
+                downloadGenerations.removeValue(forKey: modelID)
+            }
         }
     }
 
     /// Re-download Nemotron 3.5 to pick up a newer upstream build: delete the cached
     /// files (so the download isn't skipped), then start a fresh download.
     private func updateNemotron35(_ option: BackendOption) {
+        // Check before unloading or deleting the installed model: startDownload also
+        // rejects incompatible backends, so otherwise no replacement would be started.
+        guard option.isCompatible() else { return }
+        guard let mutation = controller.beginModelFileMutation() else { return }
         Task {
+            defer { controller.endModelFileMutation(mutation) }
             do {
                 await controller.transcriptionCoordinator.unloadNemotron35Transcriber()
                 try await deleteModelFiles(option)
@@ -970,26 +1966,57 @@ struct ModelsView: View {
     }
 
     private func deleteModel(_ option: BackendOption) {
-        if option.backend == BackendOption.gemma4E2BLiteRT.backend,
-           appState.selectedPostProcessorBackend == .gemma4LiteRT {
+        guard let mutation = controller.beginModelFileMutation() else { return }
+        if option == .nemotron35Multilingual,
+           appState.config.resolvedMeetingLiveCaptionBackend == .nemotron35 {
+            controller.updateConfig { $0.enableLiveStreamingPartials = false }
+        }
+        if appState.selectedPostProcessorBackend == .gemma4LiteRT,
+           appState.config.postProcessorGemmaModel == option.model {
             controller.selectPostProcessorBackend(.local)
         }
         if appState.selectedBackend == option {
             let fallback = downloadedModels
                 .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
-                .first ?? .parakeetMultilingual
+                .first ?? (option == .parakeetUnified ? .parakeetMultilingual : .parakeetUnified)
             controller.selectBackend(fallback)
         }
-        // Remove cached model files
+        let task = downloadTasks[option.model]
+        task?.cancel()
+        let deletionGeneration = UUID()
+        downloadGenerations[option.model] = deletionGeneration
+        downloadTasks.removeValue(forKey: option.model)
+
+        // Stop any transfer before removing files so a late write cannot recreate
+        // part of the model after the deletion has completed.
         Task {
+            defer { controller.endModelFileMutation(mutation) }
+            let deletionToken = await ManagedASRModelDownloader.beginDeletion(
+                modelID: option.model
+            )
             do {
+                _ = await task?.value
+                let shouldDelete = await MainActor.run {
+                    downloadGenerations[option.model] == deletionGeneration
+                }
+                guard shouldDelete else {
+                    await ManagedASRModelDownloader.endDeletion(deletionToken)
+                    return
+                }
                 try await deleteModelFiles(option)
                 await MainActor.run {
                     _ = downloadedModels.remove(option.model)
+                    if appState.selectedMeetingTranscriptionBackend == option {
+                        controller.refreshMeetingTranscriptionSelectionForAvailability()
+                    }
+                    downloadSnapshots.removeValue(forKey: option.model)
+                    downloadMessages.removeValue(forKey: option.model)
+                    downloadGenerations.removeValue(forKey: option.model)
                 }
             } catch {
                 fputs("[muesli-native] model delete failed for \(option.backend)/\(option.model): \(error)\n", stderr)
             }
+            await ManagedASRModelDownloader.endDeletion(deletionToken)
         }
     }
 
@@ -999,36 +2026,39 @@ struct ModelsView: View {
         case "whisper":
             WhisperKitTranscriber.deleteModel(option.model)
         case "nemotron35":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms")
-            try removeItemIfPresent(at: path, fileManager: fm)
+            try removeItemIfPresent(at: Nemotron35ModelStore.cacheDirectory(fileManager: fm), fileManager: fm)
         case "cohere":
             try removeItemIfPresent(at: CohereTranscribeModelStore.cacheDirectory(), fileManager: fm)
-        case "indicasr":
-            if IndicASRModelStore.localOverrideDirectory() == nil {
-                try removeItemIfPresent(at: IndicASRModelStore.cacheDirectory(), fileManager: fm)
+        case "bodhan":
+            if let model = BodhanModel(rawValue: option.model) {
+                if model.localOverride == nil {
+                    await controller.transcriptionCoordinator.unloadBodhanTranscriber(ifLoadedModelID: model.rawValue)
+                    try removeItemIfPresent(at: model.cacheDirectory, fileManager: fm)
+                }
             }
         case "sensevoice":
             SenseVoiceTranscriber.deleteModelFiles(fileManager: fm)
         case "gemma4-litert":
             await controller.transcriptionCoordinator.unloadGemma4LiteRTTranscriber()
-            try Gemma4LiteRTModelStore.deleteModelFiles(fileManager: fm)
+            try Gemma4LiteRTModelStore.deleteModelFiles(
+                model: Gemma4LiteRTModel.resolved(option.model),
+                fileManager: fm
+            )
         case "fluidaudio":
-            // FluidAudio models are in ~/Library/Application Support/FluidAudio/Models/
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if option.model.contains("parakeet") {
-                let version = option.model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
-                    for dir in contents where dir.lastPathComponent.contains("parakeet") && dir.lastPathComponent.contains(version) {
-                        try removeItemIfPresent(at: dir, fileManager: fm)
-                    }
-                }
-            }
+            let version: AsrModelVersion = option.model.contains("v2") ? .v2 : .v3
+            await controller.transcriptionCoordinator.unloadFluidAudioTranscriber(
+                ifLoadedVersion: version
+            )
+            let plan = version == .v2
+                ? ManagedASRModelPlans.parakeetV2()
+                : ManagedASRModelPlans.parakeetV3()
+            try plan.delete(fileManager: fm)
+        case "parakeet-unified":
+            await controller.transcriptionCoordinator.unloadParakeetUnifiedTranscriber()
+            try ManagedASRModelPlans.parakeetUnified().delete(fileManager: fm)
         case "qwen":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            try removeItemIfPresent(at: path, fileManager: fm)
+            await controller.transcriptionCoordinator.unloadQwen3Transcriber()
+            try Qwen3AsrModelStore.deleteModelFiles(fileManager: fm)
         default:
             break
         }
@@ -1069,8 +2099,12 @@ struct ModelsView: View {
         if BackendOption.whisperFamily.contains(active) {
             selectedWhisperModel = active.model
         }
+        if let model = BodhanModel(rawValue: active.model) {
+            if model.isCore { selectedBodhanCoreModel = active.model }
+            else { selectedBodhanFlexModel = active.model }
+        }
         if BackendOption.experimental.contains(active) {
-            return
+            showExperimental = true
         }
     }
 
@@ -1079,137 +2113,34 @@ struct ModelsView: View {
         case "whisper":
             return WhisperKitTranscriber.isModelDownloaded(option.model)
         case "nemotron35":
-            let path = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/muesli/models/nemotron35-multilingual-2240ms/encoder.mlmodelc/coremldata.bin")
-            return fm.fileExists(atPath: path.path)
+            return Nemotron35ModelStore.isModelDownloaded(fileManager: fm)
         case "fluidaudio":
-            // Check FluidAudio's cache
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models")
-            if option.model.contains("parakeet") {
-                let version = option.model.contains("v2") ? "v2" : "v3"
-                if let contents = try? fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil) {
-                    return contents.contains { $0.lastPathComponent.contains("parakeet") && $0.lastPathComponent.contains(version) }
-                }
-            }
-            return false
+            let plan = option.model.contains("v2")
+                ? ManagedASRModelPlans.parakeetV2()
+                : ManagedASRModelPlans.parakeetV3()
+            return plan.isAvailableLocally(fileManager: fm)
+        case "parakeet-unified":
+            return ManagedASRModelPlans.parakeetUnified().isAvailableLocally(fileManager: fm)
         case "qwen":
-            let supportDir = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models/qwen3-asr-0.6b-coreml")
-            return fm.fileExists(atPath: supportDir.appendingPathComponent("int8/vocab.json").path)
-                || fm.fileExists(atPath: supportDir.appendingPathComponent("f32/vocab.json").path)
+            return Qwen3AsrModelStore.isModelDownloaded(fileManager: fm)
         case "cohere":
             return CohereTranscribeModelStore.isAvailableLocally()
-        case "indicasr":
-            return IndicASRModelStore.isAvailableLocally()
+        case "bodhan":
+            return BodhanModel(rawValue: option.model)?.isDownloaded ?? false
         case "sensevoice":
-            return SenseVoiceTranscriber.isModelDownloaded()
+            return SenseVoiceTranscriber.isModelDownloaded(fileManager: fm)
         case "gemma4-litert":
-            return Gemma4LiteRTModelStore.isAvailableLocally(fileManager: fm)
+            return Gemma4LiteRTModelStore.isAvailableLocally(
+                model: Gemma4LiteRTModel.resolved(option.model),
+                fileManager: fm
+            )
+        case "apple-speech":
+            if #available(macOS 26.0, *) {
+                return AppleSpeechAnalyzerTranscriber.isSupportedOnCurrentSystem
+            }
+            return false
         default:
             return false
-        }
-    }
-}
-
-private final class URLSessionInvalidator: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didInvalidate = false
-
-    func finish(_ session: URLSession) {
-        invalidate(session, action: { $0.finishTasksAndInvalidate() })
-    }
-
-    func cancel(_ session: URLSession) {
-        invalidate(session, action: { $0.invalidateAndCancel() })
-    }
-
-    private func invalidate(_ session: URLSession, action: (URLSession) -> Void) {
-        lock.lock()
-        guard !didInvalidate else {
-            lock.unlock()
-            return
-        }
-        didInvalidate = true
-        lock.unlock()
-        action(session)
-    }
-}
-
-/// URLSessionDownloadDelegate bridge for post-processor GGUF downloads.
-/// Uses OS-level buffered download task instead of byte-by-byte async iteration.
-private final class PostProcDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let onProgress: (Double) -> Void
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<URL, Error>?
-
-    init(onProgress: @escaping (Double) -> Void) {
-        self.onProgress = onProgress
-    }
-
-    func setContinuation(_ c: CheckedContinuation<URL, Error>) {
-        lock.lock()
-        defer { lock.unlock() }
-        continuation = c
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        var dest: URL?
-        do {
-            if let response = downloadTask.response as? HTTPURLResponse,
-               !(200..<300).contains(response.statusCode) {
-                throw NSError(domain: "PostProcDownload", code: response.statusCode, userInfo: [
-                    NSLocalizedDescriptionKey: "Post-processor download failed with HTTP \(response.statusCode)",
-                ])
-            }
-
-            // URLSession deletes the temp file after this returns — move it first.
-            let movedURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + ".gguf.tmp")
-            try FileManager.default.moveItem(at: location, to: movedURL)
-            dest = movedURL
-            try validateGGUFHeader(at: movedURL)
-            resumeOnce(.success(movedURL))
-        } catch {
-            if let dest { try? FileManager.default.removeItem(at: dest) }
-            resumeOnce(.failure(error))
-        }
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error else { return }
-        resumeOnce(.failure(error))
-    }
-
-    private func resumeOnce(_ result: Result<URL, Error>) {
-        lock.lock()
-        let continuation = continuation
-        self.continuation = nil
-        lock.unlock()
-
-        switch result {
-        case .success(let url):
-            continuation?.resume(returning: url)
-        case .failure(let error):
-            continuation?.resume(throwing: error)
-        }
-    }
-
-    private func validateGGUFHeader(at url: URL) throws {
-        let fh = try FileHandle(forReadingFrom: url)
-        defer { try? fh.close() }
-        let header = try fh.read(upToCount: 4) ?? Data()
-        guard header == Data([0x47, 0x47, 0x55, 0x46]) else {
-            throw NSError(domain: "PostProcDownload", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Downloaded post-processor file is not a GGUF model",
-            ])
         }
     }
 }

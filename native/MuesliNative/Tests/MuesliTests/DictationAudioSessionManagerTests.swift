@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import MuesliCore
 import Testing
 @testable import MuesliNativeApp
 
@@ -24,7 +25,7 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .speakerLike)
         harness.recorder.warmUpDelay = 0.2
 
-        harness.manager.refreshRoute(intent: .idlePrewarm(.routeChange), canWarmUp: true)
+        harness.manager.refreshRoute(intent: .idlePrewarm(.startup), canWarmUp: true)
         let startedAt = Date()
         harness.manager.arm(source: "hotkey")
         let elapsed = Date().timeIntervalSince(startedAt)
@@ -277,18 +278,54 @@ struct DictationAudioSessionManagerTests {
         })
     }
 
-    @Test("speaker route refresh warms graph without opening mic")
-    func speakerRouteRefreshWarmsGraphWithoutOpeningMic() {
+    @Test("speaker startup refresh warms graph without opening mic")
+    func speakerStartupRefreshWarmsGraphWithoutOpeningMic() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.refreshRoute(intent: .idlePrewarm(.startup), canWarmUp: true)
+        harness.wait()
+
+        #expect(harness.route.refreshCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
+        #expect(harness.recorder.warmUpCalls == 1)
+        #expect(harness.recorder.startCalls == 0)
+        #expect(harness.recorder.activateCalls == 0)
+    }
+
+    @Test("route change refresh does not touch the audio graph")
+    func routeChangeRefreshDoesNotTouchAudioGraph() {
         let harness = Harness(routeKind: .speakerLike)
 
         harness.manager.refreshRoute(intent: .idlePrewarm(.routeChange), canWarmUp: true)
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
-        #expect(harness.recorder.coolDownCalls == 1)
-        #expect(harness.recorder.warmUpCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
+        #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
+        #expect(harness.events.contains { event in
+            if case .latency(let name, _) = event {
+                return name == "route_refresh_ignored:idle_routeChange"
+            }
+            return false
+        })
+    }
+
+    @Test("route callback consumes the controller cache without refreshing HAL again")
+    func routeCallbackAvoidsDuplicateRouteRefresh() {
+        let harness = Harness(routeKind: .speakerLike)
+
+        harness.manager.refreshRoute(
+            intent: .idlePrewarm(.routeChange),
+            canWarmUp: true,
+            refreshRoutingCache: false
+        )
+        harness.wait()
+
+        #expect(harness.route.refreshCalls == 0)
+        #expect(harness.recorder.warmUpCalls == 0)
+        #expect(harness.recorder.startCalls == 0)
     }
 
     @Test("speaker route skips idle warmup when default input is not built in")
@@ -296,18 +333,18 @@ struct DictationAudioSessionManagerTests {
         let harness = Harness(routeKind: .speakerLike)
         harness.route.systemDefaultInputIsBuiltIn = false
 
-        harness.manager.refreshRoute(intent: .idlePrewarm(.routeChange), canWarmUp: true)
+        harness.manager.refreshRoute(intent: .idlePrewarm(.startup), canWarmUp: true)
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
-        #expect(harness.recorder.coolDownCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
         #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
             if case .latency(let name, _) = event {
-                return name == "warmup_skipped:idle_routeChange:risky_default_input"
+                return name == "warmup_skipped:idle_startup:risky_default_input"
             }
             return false
         })
@@ -356,18 +393,18 @@ struct DictationAudioSessionManagerTests {
     func headphoneRouteRefreshSkipsIdleMicWarmup() {
         let harness = Harness(routeKind: .headphoneLike, preferredInputDeviceID: 82)
 
-        harness.manager.refreshRoute(intent: .idlePrewarm(.routeChange), canWarmUp: true)
+        harness.manager.refreshRoute(intent: .idlePrewarm(.startup), canWarmUp: true)
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
-        #expect(harness.recorder.coolDownCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
         #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
         #expect(!harness.recorder.keepsAudioGraphWarm)
         #expect(harness.events.contains { event in
             if case .latency(let name, _) = event {
-                return name == "warmup_skipped:idle_routeChange:risky_route"
+                return name == "warmup_skipped:idle_startup:risky_route"
             }
             return false
         })
@@ -377,11 +414,11 @@ struct DictationAudioSessionManagerTests {
     func unknownRouteRefreshSkipsIdleMicWarmup() {
         let harness = Harness(routeKind: .unknown)
 
-        harness.manager.refreshRoute(intent: .idlePrewarm(.routeChange), canWarmUp: true)
+        harness.manager.refreshRoute(intent: .idlePrewarm(.startup), canWarmUp: true)
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
-        #expect(harness.recorder.coolDownCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
         #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
@@ -396,7 +433,7 @@ struct DictationAudioSessionManagerTests {
         harness.wait()
 
         #expect(harness.route.refreshCalls == 1)
-        #expect(harness.recorder.coolDownCalls == 1)
+        #expect(harness.recorder.coolDownCalls == 0)
         #expect(harness.recorder.warmUpCalls == 0)
         #expect(harness.recorder.startCalls == 0)
         #expect(harness.recorder.activateCalls == 0)
@@ -605,6 +642,33 @@ struct DictationAudioSessionManagerTests {
 
         #expect(harness.recorder.cancelCalls == 1)
         #expect(!harness.recorder.keepsAudioGraphWarm)
+    }
+
+    @Test("cancel detaches ownership before queued teardown so immediate rearm gets a new session")
+    func cancelThenImmediateRearmGetsNewSession() {
+        let harness = Harness(routeKind: .speakerLike)
+        harness.managerQueue.suspend()
+
+        harness.manager.arm(source: "first")
+        let firstSessionID = harness.manager.currentSessionID
+        harness.manager.cancel(reason: "replace")
+
+        #expect(firstSessionID != nil)
+        #expect(harness.manager.currentSessionID == nil)
+
+        harness.manager.arm(source: "second")
+        let secondSessionID = harness.manager.currentSessionID
+
+        #expect(secondSessionID != nil)
+        #expect(secondSessionID != firstSessionID)
+
+        harness.managerQueue.resume()
+        harness.wait()
+
+        #expect(harness.manager.currentSessionID == secondSessionID)
+        if let secondSessionID {
+            #expect(harness.manager.currentState == .armed(secondSessionID))
+        }
     }
 }
 
@@ -821,5 +885,45 @@ private final class FakeDictationRoute: DictationAudioRouting {
 
     func refreshRouteAfterDictationSession() {
         restoreCalls += 1
+    }
+}
+
+// Reuse the fake recorder to exercise the controller without opening a microphone.
+extension ComputerUseRunDiagnosticsTests {
+    @Test("denied screen permission releases prepared CUA ownership before the next interaction")
+    @MainActor
+    func permissionDenialReleasesPreparedSession() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DictationStore(databaseURL: directory.appendingPathComponent("muesli.db"))
+        try store.migrateIfNeeded()
+        let harness = Harness(routeKind: .speakerLike)
+        let controller = MuesliController(
+            runtime: RuntimePaths(repoRoot: directory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            dictationStore: store,
+            configStore: ConfigStore(supportDirectory: directory)
+        )
+        controller.computerUseAudioSessionManager = harness.manager
+        controller.handleComputerUsePrepare()
+        harness.wait()
+        #expect(harness.manager.hasActiveSession)
+        #expect(controller.appState.dictationState == .preparing)
+        #expect(!controller.canPrepareComputerUseCommand)
+
+        #expect(!controller.ensureComputerUseScreenRecordingAccess(isGranted: false))
+        harness.wait()
+        #expect(!harness.manager.hasActiveSession)
+        #expect(controller.appState.dictationState == .idle)
+        #expect(controller.canPrepareComputerUseCommand)
+
+        controller.handleComputerUsePrepare()
+        harness.wait()
+        #expect(harness.manager.hasActiveSession)
+        #expect(controller.ensureComputerUseScreenRecordingAccess(isGranted: true))
+        #expect(harness.manager.hasActiveSession)
+        #expect(harness.recorder.activateCalls == 2)
+        #expect(!controller.ensureComputerUseScreenRecordingAccess(isGranted: false))
+        harness.wait()
     }
 }

@@ -7,6 +7,8 @@ enum DiagnosticIncidentKind: String, Codable, CaseIterable, Sendable {
     case streamingDictationStartFailed = "streaming_dictation_start_failed"
     case streamingDictationRuntimeFailed = "streaming_dictation_runtime_failed"
     case meetingStartFailed = "meeting_start_failed"
+    case meetingMicrophoneCaptureFailed = "meeting_microphone_capture_failed"
+    case meetingSystemAudioCaptureFailed = "meeting_system_audio_capture_failed"
     case meetingProcessingFailed = "meeting_processing_failed"
     case meetingRecordingSaveFailed = "meeting_recording_save_failed"
 
@@ -18,6 +20,8 @@ enum DiagnosticIncidentKind: String, Codable, CaseIterable, Sendable {
         case .streamingDictationStartFailed: return "Streaming dictation failed to start"
         case .streamingDictationRuntimeFailed: return "Streaming dictation failed"
         case .meetingStartFailed: return "Meeting recording failed to start"
+        case .meetingMicrophoneCaptureFailed: return "Meeting microphone capture failed"
+        case .meetingSystemAudioCaptureFailed: return "Meeting system audio capture failed"
         case .meetingProcessingFailed: return "Meeting processing failed"
         case .meetingRecordingSaveFailed: return "Meeting recording save failed"
         }
@@ -26,7 +30,8 @@ enum DiagnosticIncidentKind: String, Codable, CaseIterable, Sendable {
     var userImpact: DiagnosticUserImpact {
         switch self {
         case .manualReport: return .informational
-        case .meetingRecordingSaveFailed: return .degradedResult
+        case .meetingRecordingSaveFailed, .meetingMicrophoneCaptureFailed,
+             .meetingSystemAudioCaptureFailed: return .degradedResult
         default: return .operationBlocked
         }
     }
@@ -40,6 +45,8 @@ enum DiagnosticIncidentStage: String, Codable, CaseIterable, Sendable {
     case manualReport = "manual_report"
     case createLiveMeeting = "create_live_meeting"
     case startMeetingRecording = "start_meeting_recording"
+    case meetingMicrophoneCapture = "meeting_microphone_capture"
+    case meetingSystemAudioCapture = "meeting_system_audio_capture"
     case saveMeetingRecording = "save_meeting_recording"
     case meetingStopProcessing = "meeting_stop_processing"
     case dictationAudioSession = "dictation_audio_session"

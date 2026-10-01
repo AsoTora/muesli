@@ -4,6 +4,7 @@ import MuesliCore
 struct AboutView: View {
     let appState: AppState
     let onOpenManualDiagnosticReport: () -> Void
+    let onSetAutomaticDiagnosticIssuePrompts: (Bool) -> Void
 
     private let githubURL = "https://github.com/Muesli-HQ/muesli"
     private let donateURL = "https://buymeacoffee.com/phequals7"
@@ -86,6 +87,19 @@ struct AboutView: View {
                             onOpenManualDiagnosticReport()
                         }
                     }
+
+                    Divider().background(MuesliTheme.surfaceBorder)
+
+                    aboutRow("Automatic issue reporting prompts") {
+                        Toggle("Auto reporting", isOn: Binding(
+                            get: { appState.config.enableAutomaticDiagnosticIssuePrompts },
+                            set: onSetAutomaticDiagnosticIssuePrompts
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .help("Suggest an anonymized GitHub issue after an app error")
+                        .accessibilityLabel("Automatic issue reporting prompts")
+                    }
                 }
 
                 // MARK: - Data
@@ -132,7 +146,9 @@ struct AboutView: View {
 
                 Spacer(minLength: MuesliTheme.spacing32)
             }
-            .padding(MuesliTheme.spacing32)
+            .padding(.horizontal, MuesliTheme.spacing32)
+            .padding(.top, MuesliTheme.pageTop)
+            .padding(.bottom, MuesliTheme.spacing32)
         }
         .background(MuesliTheme.backgroundBase)
     }

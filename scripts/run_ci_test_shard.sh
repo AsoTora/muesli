@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-shard="${1:-}"
+list_filters=false
+if [[ "${1:-}" == "--list-filters" ]]; then
+  list_filters=true
+  shard="${2:-}"
+else
+  shard="${1:-}"
+fi
 
 if [[ -z "${shard}" ]]; then
-  echo "usage: $0 <core|dictation-transcription|meetings>" >&2
+  echo "usage: $0 [--list-filters] <core|dictation-transcription|meetings>" >&2
   exit 2
 fi
 
@@ -13,25 +19,54 @@ case "${shard}" in
     filters=(
       ConfigStoreTests
       DictationStoreTests
+      ComputerUseExecutorTests
+      ComputerUseObservationCaptureTests
+      ComputerUseObservationTests
+      ComputerUsePlannerModelTests
+      ComputerUsePlannerRequestTests
+      ComputerUsePlannerResponseTests
+      ComputerUsePlannerRuntimeTests
+      ComputerUseRunDiagnosticsTests
+      ComputerUseToolRegistryTests
+      ComputerUseTraceFormatterTests
+      MuesliCKSyncEngineTests
       MuesliCLITests
       ChatGPTAuthTests
+      ChatGPTResponsesTransportTests
       ChatGPTTokenStorageTests
+      OpenRouterAuthTests
+      SettingsPermissionRefreshReasonTests
+      InteractionPermissionMonitorTests
+      AccessibilityPermissionGuideTests
+      DictationTestLifecycleTests
+      OnboardingFlowTests
+      OnboardingProgressTests
       FloatingIndicatorVisibilityTests
       IndicatorFrameSizeTests
+      NotchIndicatorTests
+      RecordingIndicatorStyleTests
+      WindowAppearanceTests
       OpenAILogoShapeTests
+      StandardMenuShortcutTests
       MeetingChunkCollectorTests
       AppConfigTests
       CGPointCodableTests
       UpdateFailureGuidanceTests
       WordCountTests
+      CustomWordDictionaryTests
+      ModelDownloadCoordinatorTests
+      BodhanBackendTests
+      BodhanArtifactValidationTests
+      BodhanLifecycleTests
+      DictationBackendPreparationTests
+      ContributionMilestoneTests
     )
     ;;
   dictation-transcription)
     filters=(
-      WhisperCppTranscriberTests
       FluidAudioTranscriberTests
+      AppleSpeechAnalyzerBackendTests
       BackendCoverageTests
-      CanaryQwenBackendTests
       FillerWordFilterTests
       JaroWinklerTests
       CustomWordMatcherApplyTests
@@ -39,38 +74,83 @@ case "${shard}" in
       DeltaPasteTests
       TranscriptAccumulationTests
       StreamingDictationControllerLifecycleTests
+      DictationAttributionPolicyTests
       NemotronDictationModePolicyTests
       Nemotron35StreamStateTests
       Nemotron35BackendMetadataTests
       Nemotron35LanguageTests
+      WhisperKitLanguageTests
       SpeechSegmentTests
       SpeechTranscriptionResultTests
       TranscriptionCoordinatorTests
       TranscriptionEngineArtifactsFilterTests
+      DiarizerRuntimePolicyTests
+      DiarizerPreloadDiagnosticsTests
+      DiarizerPreloadCoordinationTests
       PasteControllerTests
+      DictationPasteSpacingPolicyTests
+      DictationPasteSpacingTests
+      QuilTransformationTests
+      QuilAvailabilityGateTests
+      QuilDirectAudioTests
       BackendOptionTests
+      OpenAIDictationProviderTests
+      OpenRouterTranscriptionClientTests
       SummaryModelPresetTests
       HotkeyMonitorTests
+      PushToTalkEnablementPolicyTests
+      ShortcutFeatureEnablementPolicyTests
+      InteractiveAudioSessionOwnershipTests
       DictationStateTests
       HotkeyConfigTests
       DictationStateIdleTests
+      DictationCorrectionMonitorTests
+      Nemotron35ModelStoreTests
     )
     ;;
   meetings)
     filters=(
+      AudioAttributionServiceTests
+      CameraActivityMonitorTests
+      MicrophoneActivityMonitorTests
+      MeetingCaptureLifecycleTests
+      AudioQueueInputRecorderTests
+      FallbackStreamingDictationRecorderTests
+      MeetingCaptureShutdownTests
+      MeetingMonitoringModePolicyTests
+      MeetingAudioRecoveryDeadlinesTests
+      MeetingSignalRefreshPolicyTests
+      MeetingMicRecoveryCoordinatorTests
+      MeetingMicHealthTrackerTests
+      MeetingSystemAudioWatchdogTests
+      AudioGraphExceptionBridgeTests
+      DiagnosticIncidentTests
+      DictationAudioRouteControllerTests
+      MeetingContactIdentityTests
+      MeetingContactResolverTests
       MeetingDetectorTests
+      MeetingParticipantStoreTests
+      MeetingProcessingStageTests
       MeetingRecordingWriterTests
+      MeetingRecordingTranscriberTests
       MeetingResumePolicyTests
+      MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
       MeetingFollowUpSummaryPromptTests
       MeetingSummaryClientTests
+      ClaudeCodeSummarizerTests
       MeetingsNavigationTests
       MeetingBrowserLogicTests
+      MeetingNotesInlineMarkdownTests
       TranscriptFormatterTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
       MeetingTemplateResolutionTests
+      MeetingTemplatesDefaultFallbackTests
+      RouteAwareMeetingMicRecorderTests
+      CalendarEventQueryTests
+      CalendarMonitorLifecycleTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
     )
@@ -81,7 +161,21 @@ case "${shard}" in
     ;;
 esac
 
+if [[ "${list_filters}" == true ]]; then
+  printf '%s\n' "${filters[@]}"
+  exit 0
+fi
+
 args=(--package-path native/MuesliNative)
+if [[ "${shard}" == meetings ]]; then
+  # Concurrent suites can starve the utility-priority caption tasks on small
+  # runners. Serialize test cases, preserving concurrency exercised inside each
+  # test, rather than weakening their deadlines or changing production QoS.
+  args+=(--no-parallel)
+fi
+if [[ -n "${MUESLI_SWIFTPM_SCRATCH_PATH:-}" ]]; then
+  args+=(--scratch-path "${MUESLI_SWIFTPM_SCRATCH_PATH}")
+fi
 for filter in "${filters[@]}"; do
   args+=(--filter "${filter}")
 done

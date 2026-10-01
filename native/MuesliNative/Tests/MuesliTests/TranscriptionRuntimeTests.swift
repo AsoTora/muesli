@@ -39,12 +39,12 @@ struct SpeechTranscriptionResultTests {
     }
 }
 
-@Suite("Qwen3 inference gate")
-struct Qwen3InferenceGateTests {
+@Suite("Inference serialization gate")
+struct InferenceGateTests {
 
     @Test("cancelled waiter is removed before next slot")
     func cancelledWaiterDoesNotConsumeSlot() async throws {
-        let gate = Qwen3InferenceGate()
+        let gate = InferenceGate()
         try await gate.acquire()
 
         let cancelled = Task {
@@ -91,8 +91,181 @@ struct TranscriptionCoordinatorTests {
 
     @Test("backend routing covers all known backends")
     func allBackendsCovered() {
-        let backends = Set(BackendOption.all.map(\.backend))
+        var backends = Set(BackendOption.all.map(\.backend))
+        backends.insert(BackendOption.appleSpeechAnalyzer.backend)
         #expect(backends == TranscriptionCoordinator.explicitlyRoutedBackendIdentifiers.union(["fluidaudio"]))
+    }
+
+    @Test("Apple Speech cleanup waits for an active use")
+    func appleSpeechCleanupWaitsForActiveUse() async {
+        let lifecycle = AppleSpeechUseLifecycle()
+        let cleanupCount = TranscriptionLifecycleTestCounter()
+
+        await lifecycle.beginUse()
+        await lifecycle.requestCleanup {
+            await cleanupCount.increment()
+        }
+
+        #expect(await lifecycle.snapshot() == .init(
+            activeUseCount: 1,
+            hasDeferredCleanup: true,
+            isCleaningUp: false
+        ))
+        #expect(await cleanupCount.value == 0)
+
+        await lifecycle.endUse()
+        #expect(await cleanupCount.value == 1)
+    }
+
+    @Test("Apple Speech cleanup waits for dictation and meeting uses")
+    func appleSpeechCleanupWaitsForCombinedUses() async {
+        let lifecycle = AppleSpeechUseLifecycle()
+        let cleanupCount = TranscriptionLifecycleTestCounter()
+
+        await lifecycle.beginUse()
+        await lifecycle.beginUse()
+        await lifecycle.requestCleanup {
+            await cleanupCount.increment()
+        }
+
+        await lifecycle.endUse()
+        #expect(await cleanupCount.value == 0)
+        await lifecycle.endUse()
+        #expect(await cleanupCount.value == 1)
+    }
+
+    @Test("a newer Apple Speech use cancels a deferred stale cleanup")
+    func newerAppleSpeechUseCancelsDeferredCleanup() async {
+        let lifecycle = AppleSpeechUseLifecycle()
+        let cleanupCount = TranscriptionLifecycleTestCounter()
+
+        await lifecycle.beginUse()
+        await lifecycle.requestCleanup {
+            await cleanupCount.increment()
+        }
+        await lifecycle.beginUse()
+
+        await lifecycle.endUse()
+        await lifecycle.endUse()
+
+        #expect(await cleanupCount.value == 0)
+        #expect(await lifecycle.snapshot() == .init(
+            activeUseCount: 0,
+            hasDeferredCleanup: false,
+            isCleaningUp: false
+        ))
+    }
+
+    @Test("a new Apple Speech use waits for in-flight cleanup")
+    func appleSpeechUseWaitsForCleanup() async {
+        let lifecycle = AppleSpeechUseLifecycle()
+        let cleanupStarted = TranscriptionLifecycleTestLatch()
+        let allowCleanup = TranscriptionLifecycleTestLatch()
+        let useStarted = TranscriptionLifecycleTestCounter()
+
+        let cleanupTask = Task {
+            await lifecycle.requestCleanup {
+                await cleanupStarted.signal()
+                await allowCleanup.wait()
+            }
+        }
+        await cleanupStarted.wait()
+
+        let useTask = Task {
+            await lifecycle.beginUse()
+            await useStarted.increment()
+        }
+        for _ in 0..<100 {
+            if (await lifecycle.snapshot()).activeUseCount > 0 { break }
+            await Task.yield()
+        }
+
+        #expect((await lifecycle.snapshot()).activeUseCount == 1)
+        #expect(await useStarted.value == 0)
+        #expect((await lifecycle.snapshot()).isCleaningUp)
+
+        await allowCleanup.signal()
+        await cleanupTask.value
+        await useTask.value
+
+        #expect(await useStarted.value == 1)
+        await lifecycle.endUse()
+    }
+
+    @Test("a newer cleanup request survives an older in-flight cleanup")
+    func newerAppleSpeechCleanupIsNotDropped() async {
+        let lifecycle = AppleSpeechUseLifecycle()
+        let firstCleanupStarted = TranscriptionLifecycleTestLatch()
+        let allowFirstCleanup = TranscriptionLifecycleTestLatch()
+        let secondCleanupCount = TranscriptionLifecycleTestCounter()
+
+        let firstCleanupTask = Task {
+            await lifecycle.requestCleanup {
+                await firstCleanupStarted.signal()
+                await allowFirstCleanup.wait()
+            }
+        }
+        await firstCleanupStarted.wait()
+
+        let useTask = Task {
+            await lifecycle.beginUse()
+        }
+        for _ in 0..<100 {
+            if (await lifecycle.snapshot()).activeUseCount > 0 { break }
+            await Task.yield()
+        }
+        #expect((await lifecycle.snapshot()).activeUseCount == 1)
+
+        let secondCleanupTask = Task {
+            await lifecycle.requestCleanup {
+                await secondCleanupCount.increment()
+            }
+        }
+        for _ in 0..<100 {
+            if (await lifecycle.snapshot()).hasDeferredCleanup { break }
+            await Task.yield()
+        }
+        #expect((await lifecycle.snapshot()).hasDeferredCleanup)
+
+        await allowFirstCleanup.signal()
+        await firstCleanupTask.value
+        await useTask.value
+        await secondCleanupTask.value
+
+        #expect(await secondCleanupCount.value == 0)
+        #expect((await lifecycle.snapshot()).hasDeferredCleanup)
+
+        await lifecycle.endUse()
+        #expect(await secondCleanupCount.value == 1)
+    }
+}
+
+private actor TranscriptionLifecycleTestCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
+    }
+}
+
+private actor TranscriptionLifecycleTestLatch {
+    private var isSignaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isSignaled { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func signal() {
+        isSignaled = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
     }
 }
 
@@ -217,10 +390,40 @@ struct TranscriptionEngineArtifactsFilterTests {
         #expect(TranscriptionEngineArtifactsFilter.apply("") == "")
     }
 
-    @Test("does not strip artifact when it appears mid-sentence")
-    func midSentenceNotStripped() {
+    @Test("strips artifact when it appears mid-sentence")
+    func midSentenceArtifact() {
         let text = "Hello [blank_audio] world"
-        #expect(TranscriptionEngineArtifactsFilter.apply(text) == text)
+        #expect(TranscriptionEngineArtifactsFilter.apply(text) == "Hello world")
+    }
+
+    @Test("strips decorated streaming blank-audio artifact")
+    func decoratedStreamingArtifact() {
+        #expect(TranscriptionEngineArtifactsFilter.apply(">> [BLANK_AUDIO]") == "")
+        #expect(TranscriptionEngineArtifactsFilter.apply(">> [BLANK_AUDIO] Hello") == "Hello")
+        #expect(TranscriptionEngineArtifactsFilter.apply(">> Hello") == ">> Hello")
+    }
+
+    @Test("strips model control tokens and non-speech annotations")
+    func controlTokens() {
+        #expect(
+            TranscriptionEngineArtifactsFilter.apply("<EOU> Hello <EOB> [silence]") ==
+                "Hello"
+        )
+    }
+
+    @Test("strips foreign-language placeholders without removing ordinary sentences")
+    func foreignLanguagePlaceholder() {
+        #expect(TranscriptionEngineArtifactsFilter.apply("[SPEAKING IN FOREIGN LANGUAGE]") == "")
+        #expect(
+            TranscriptionEngineArtifactsFilter.apply("Speaking in a foreign language.") ==
+                "Speaking in a foreign language."
+        )
+        #expect(TranscriptionEngineArtifactsFilter.apply("Hello [speaking in foreign language] world") == "Hello world")
+        #expect(TranscriptionEngineArtifactsFilter.apply("[screaming]") == "")
+        #expect(
+            TranscriptionEngineArtifactsFilter.apply("We discussed speaking in foreign language classes.") ==
+                "We discussed speaking in foreign language classes."
+        )
     }
 
     @Test("strips leaked prompt suffix from transcript")
@@ -328,6 +531,90 @@ struct Qwen3PostProcessingOutputCleanerTests {
                 cleaned: cleaned,
                 input: "Please send the update to Priyanka."
             ))
+        }
+    }
+
+    @Test("recognizes LLM.swift's empty-generation placeholder for S1-mini")
+    func recognizesS1MiniEmptyOutput() {
+        #expect(Qwen3PostProcessorOutputCleaner.isS1MiniEmptyOutput("..."))
+        #expect(Qwen3PostProcessorOutputCleaner.isS1MiniEmptyOutput(". . ."))
+        #expect(Qwen3PostProcessorOutputCleaner.isS1MiniEmptyOutput("…"))
+        #expect(!Qwen3PostProcessorOutputCleaner.isS1MiniEmptyOutput("Okay."))
+    }
+
+    @available(macOS 15, *)
+    @Test("local cleanup keeps the captured configuration across model switches")
+    func localCleanupKeepsCapturedConfigurationAcrossModelSwitches() async {
+        let configurableURL = URL(fileURLWithPath: "/tmp/muesli-configurable-cleanup-test.gguf")
+        let s1MiniURL = URL(fileURLWithPath: "/tmp/muesli-s1-mini-cleanup-test.gguf")
+        let configurable = Qwen3PostProcessor.Configuration(
+            modelURL: configurableURL,
+            systemPrompt: "Configurable prompt",
+            inputFormat: .configurable
+        )
+        let s1Mini = Qwen3PostProcessor.Configuration(
+            modelURL: s1MiniURL,
+            systemPrompt: PostProcessorOption.s1MiniSystemPrompt,
+            inputFormat: .s1Mini
+        )
+        let processor = Qwen3PostProcessor(
+            modelURL: configurable.modelURL,
+            systemPrompt: configurable.systemPrompt,
+            inputFormat: configurable.inputFormat
+        )
+
+        // Configurable -> S1-mini: the active configuration changes, but the
+        // already captured configurable request must still use its own model.
+        await processor.reconfigure(
+            modelURL: s1Mini.modelURL,
+            systemPrompt: s1Mini.systemPrompt,
+            inputFormat: s1Mini.inputFormat
+        )
+        await assertMissingModel(
+            processor: processor,
+            configuration: configurable,
+            expectedPath: configurableURL.path
+        )
+
+        // S1-mini -> configurable follows the same rule in the other direction.
+        await processor.reconfigure(
+            modelURL: configurable.modelURL,
+            systemPrompt: configurable.systemPrompt,
+            inputFormat: configurable.inputFormat
+        )
+        await assertMissingModel(
+            processor: processor,
+            configuration: s1Mini,
+            expectedPath: s1MiniURL.path
+        )
+    }
+
+    @available(macOS 15, *)
+    @Test("effective local generation configuration preserves the token budget")
+    func effectiveConfigurationPreservesTokenBudget() {
+        let configuration = Qwen3PostProcessor.Configuration(
+            modelURL: URL(fileURLWithPath: "/tmp/muesli-quill-budget-test.gguf"),
+            systemPrompt: QuilTransformationPrompt.system,
+            inputFormat: .configurable,
+            maxTokenCount: Qwen3PostProcessorConfig.quilMaxContextTokens
+        )
+
+        let effective = Qwen3PostProcessor.effectiveConfiguration(for: configuration)
+
+        #expect(effective.maxTokenCount == Qwen3PostProcessorConfig.quilMaxContextTokens)
+    }
+
+    @available(macOS 15, *)
+    private func assertMissingModel(
+        processor: Qwen3PostProcessor,
+        configuration: Qwen3PostProcessor.Configuration,
+        expectedPath: String
+    ) async {
+        do {
+            _ = try await processor.process("test", configuration: configuration)
+            Issue.record("Expected the test-only missing cleanup model to fail loading")
+        } catch {
+            #expect(error.localizedDescription.contains(expectedPath))
         }
     }
 
